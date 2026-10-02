@@ -1,9 +1,11 @@
 (() => {
   "use strict";
 
-  const S = window.SURVEY;
+  const S = window.SURVEY;  // chosen by form_core.js: admin-published form, built-in default, or a draft in ?preview=1
+  const PREVIEW = M69.preview;
   const app = document.getElementById("app");
-  const LS = { records: "m69.records", settings: "m69.settings", remember: "m69.remember" };
+  // preview keeps its practice records apart from real interviews and never sends them
+  const LS = { records: PREVIEW ? "m69.preview.records" : "m69.records", settings: "m69.settings", remember: "m69.remember" };
   const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
   const BATCH = 20;
 
@@ -48,7 +50,7 @@
 
   // ------------------------------------------------------------ schema helpers
   const allQuestions = S.sections.flatMap((s) => s.q.map((q) => ({ ...q, section: s.id })));
-  const visible = (q, a) => !q.show || !!q.show(a);
+  const visible = (q, a) => M69.evalRule(q.show, a);
 
   function isAnswered(q, a) {
     switch (q.type) {
@@ -78,48 +80,7 @@
   const bmiClass = (b) => (b == null ? "" : b < 18.5 ? "น้ำหนักน้อย" : b < 23 ? "ปกติ" : b < 25 ? "ท้วม" : b < 30 ? "อ้วนระดับ 1" : "อ้วนระดับ 2");
 
   // ------------------------------------------------------------ columns / flatten (what goes to Google Sheets)
-  const META = [
-    ["uuid", "รหัสระบบ (ไม่ซ้ำ)"], ["record_id", "รหัสแบบสอบถาม"], ["form_version", "เวอร์ชันแบบฟอร์ม"],
-    ["created_at", "สร้างเมื่อ"], ["updated_at", "แก้ไขล่าสุด"], ["submitted_at", "ส่งเมื่อ"], ["complete_pct", "ตอบครบ (%)"],
-  ];
-  function columnSpec() {
-    const cols = META.map(([key, label]) => ({ key, label, q: "", codes: "" }));
-    const codes = (o) => o.map((x) => `${x.v}=${x.label}`).join("; ");
-    for (const q of allQuestions) {
-      const qn = [q.no, q.t].filter(Boolean).join(" ");
-      switch (q.type) {
-        case "single":
-          cols.push({ key: q.id, label: qn, q: q.no || "", codes: codes(q.o) });
-          q.o.filter((x) => x.other).forEach((x) => cols.push({ key: `${q.id}_o${x.v}_text`, label: `${qn} — ระบุ (${x.label})`, q: q.no || "", codes: "" }));
-          break;
-        case "multi":
-          q.o.forEach((x) => {
-            cols.push({ key: `${q.id}_o${x.v}`, label: `${qn} — ${x.label}`, q: q.no || "", codes: "1=เลือก; 0=ไม่เลือก" });
-            if (x.other) cols.push({ key: `${q.id}_o${x.v}_text`, label: `${qn} — ระบุ (${x.label})`, q: q.no || "", codes: "" });
-          });
-          break;
-        case "grid":
-          q.rows.forEach((r) => cols.push({ key: r.id, label: `${r.no} ${r.t}`, q: r.no, codes: codes(q.scale) }));
-          break;
-        case "dob":
-          [["q1_2_day", "วันเกิด"], ["q1_2_month", "เดือนเกิด (1-12)"], ["q1_2_year_be", "ปีเกิด (พ.ศ.)"], ["q1_2_age", "อายุ (ปี)"]]
-            .forEach(([key, label]) => cols.push({ key, label: `2 ${label}`, q: "2", codes: "" }));
-          break;
-        case "animals":
-          q.animals.forEach((x) => {
-            cols.push({ key: `${q.id}_${x.key}_has`, label: `${qn} — ${x.t}`, q: q.no, codes: "1=ไม่มี; 2=มี" });
-            if (x.other) cols.push({ key: `${q.id}_${x.key}_name`, label: `${qn} — ${x.t} (ชนิด)`, q: q.no, codes: "" });
-            [["n", "จำนวน (ตัว)"], ["vacc", "รับวัคซีน (ตัว)"], ["deworm", "รับยาถ่ายพยาธิ (ตัว)"]]
-              .forEach(([k, l]) => cols.push({ key: `${q.id}_${x.key}_${k}`, label: `${qn} — ${x.t} ${l}`, q: q.no, codes: "" }));
-          });
-          break;
-        default:
-          cols.push({ key: q.id, label: qn, q: q.no || "", codes: "" });
-      }
-    }
-    return cols;
-  }
-  const COLUMNS = columnSpec();
+  const COLUMNS = M69.columnSpec(S);
   const TEXT_COLUMNS = ["uuid", "record_id", "h_house_no", "h_village", "h_tambon", "h_amphoe", "h_province", "iv_first", "iv_last", "iv_faculty", "iv_zone", "iv_date"];
 
   function progress(a) {
@@ -217,6 +178,7 @@
   let syncing = false;
   async function syncPending({ quiet = false } = {}) {
     if (syncing) return;
+    if (PREVIEW) { if (!quiet) toast("โหมดทดลองแบบสอบถาม (ร่าง) — ไม่ส่งข้อมูลเข้า Sheet", true); return; }
     const pending = Object.values(records).filter((r) => r.status === "ready");
     if (!pending.length) { if (!quiet) toast("ไม่มีข้อมูลค้างส่ง"); return; }
     if (!settings.api || !settings.team) { if (!quiet) toast("ยังไม่ได้ตั้งค่า URL และรหัสทีม (เมนู ตั้งค่า)", true); return; }
@@ -420,10 +382,24 @@
   }
 
   // ------------------------------------------------------------ views
+  let newFormVersion = null;
   function topbar(extra) {
-    return h("header", { class: "top" },
-      h("a", { class: "brand", href: "#/" }, h("span", { class: "mark" }, "44"), h("span", null, h("b", null, "แบบสัมภาษณ์ชุมชน"), h("small", null, "ฝึกภาคสนามร่วม ศวส. มข. ปีการศึกษา 2569"))),
-      h("div", { class: "top-r" }, h("span", { id: "net", class: "net" }), extra));
+    return [
+      h("header", { class: "top" },
+        h("a", { class: "brand", href: "#/" }, h("span", { class: "mark" }, "44"), h("span", null, h("b", null, "แบบสัมภาษณ์ชุมชน"), h("small", null, "ฝึกภาคสนามร่วม ศวส. มข. ปีการศึกษา 2569"))),
+        h("div", { class: "top-r" }, h("span", { id: "net", class: "net" }), extra)),
+      PREVIEW ? h("div", { class: "pvbar" }, `โหมดทดลองแบบสอบถามฉบับร่าง (${S.version}) — ข้อมูลที่กรอกไม่ถูกส่งและไม่ปนกับข้อมูลจริง`) : null,
+      newFormVersion ? h("div", { class: "pvbar new" }, `มีแบบสอบถามเวอร์ชันใหม่ (${newFormVersion}) `,
+        h("button", { class: "btn tiny", type: "button", onclick: () => location.reload() }, "โหลดใหม่"),
+        " คำตอบที่กรอกไว้ยังอยู่ครบ") : null,
+    ];
+  }
+  async function checkFormUpdate({ quiet = true } = {}) {
+    try {
+      const v = await M69.refresh(settings.api, settings.team);
+      if (v) { newFormVersion = v; if (!currentRec) render({ keepScroll: true }); else toast(`มีแบบสอบถามเวอร์ชันใหม่ (${v}) กลับหน้ารายการแล้วกดโหลดใหม่`); }
+      else if (!quiet) toast(`ใช้แบบสอบถามล่าสุดอยู่แล้ว (${S.version})`);
+    } catch (e) { if (!quiet) toast(`ตรวจหาแบบสอบถามใหม่ไม่ได้: ${e.message || e}`, true); }
   }
 
   function viewHome() {
@@ -447,7 +423,8 @@
         h("div", { class: "foot-actions" },
           h("button", { class: "btn ghost", type: "button", onclick: exportCsv, disabled: !list.length }, "ดาวน์โหลดสำรอง (CSV)"),
           h("button", { class: "btn ghost", type: "button", onclick: exportCodebook }, "ดาวน์โหลด Codebook")),
-        h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น")));
+        h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น"),
+        h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ`)));
     updateNet();
   }
 
@@ -580,6 +557,9 @@
         h("label", { class: "field" }, "รหัสทีม", team),
         h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: test }, "ทดสอบการเชื่อมต่อ"), h("button", { class: "btn primary", type: "button", onclick: save }, "บันทึก")),
         result,
+        h("h2", null, "แบบสอบถาม"),
+        h("p", null, `ใช้เวอร์ชัน ${S.version} (${{ published: "ที่ผู้ดูแลเผยแพร่", default: "ฉบับตั้งต้นในเว็บ", draft: "ฉบับร่างทดลอง" }[M69.source]})`),
+        h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: () => checkFormUpdate({ quiet: false }) }, "ตรวจหาแบบสอบถามใหม่"), h("a", { class: "btn ghost", href: "admin.html" }, "ผู้ดูแล: แก้ไขแบบสอบถาม")),
         h("p", { class: "fine" }, "หัวหน้าทีมส่งลิงก์ที่มี URL ให้ได้ เช่น …/index.html#/settings?api=<URL> ส่วนรหัสทีมให้บอกกันโดยตรง ไม่ใส่ในลิงก์")));
     const p = new URLSearchParams((location.hash.split("?")[1] || ""));
     if (p.get("api")) { url.value = p.get("api"); }
@@ -662,7 +642,7 @@
     // single-choice weights by option order; anything not listed is near-uniform
     const W = {
       q1_5: [8, 62, 18, 6, 6], q1_6: [97, 1, 1, 1], q1_7: [8, 52, 14, 14, 4, 7, 1, 0], q1_8: [22, 30, 26, 10, 5, 7], q1_9: [35, 65],
-      q2_1: [55, 14, 8, 3, 16, 2, 2], q2_1_1: [12, 33, 45, 10], q2_1_2: [40, 30, 15, 15], q2_1_3: [70, 30],
+      q2_1: [55, 14, 8, 3, 16, 2, 5, 2], q2_1_1: [12, 33, 45, 10], q2_1_2: [40, 30, 15, 15], q2_1_3: [70, 30],
       q3_4_2: [72, 15, 5, 8], q3_4_2_1: [78, 17, 5], q3_4_2_2: [12, 88], q3_4_2_3: [55, 30, 7, 5, 3], q3_4_2_4: [80, 15, 5], q3_4_2_5: [10, 45, 35, 10], q3_4_3: [85, 15],
       q3_5: [60, 33, 7], q3_6: [72, 23, 5], q3_7: [22, 78],
       q4_1_3: [30, 45, 25], q4_2_1: [12, 15, 30, 38, 5], q4_2_4: [30, 70], q4_3: [38, 30, 18, 14],
@@ -672,6 +652,13 @@
       q10_1: [18, 6, 8, 40, 6, 22], q10_2: [20, 50, 30], q10_14: [55, 25, 12, 8],
       q11_1: [78, 22], q12_1_2: [2, 25, 18, 35, 18, 2], q12_1_4: [8, 62, 30], q12_1_5: [75, 22, 3], q12_2_2: [70, 25, 5], q12_3_1: [62, 38], q12_4_1: [58, 42],
       q13_4_1: [92, 8], q13_4_2: [70, 30],
+      q3_8_1: [40, 35, 15, 10], q3_8_4: [45, 15, 12, 8, 20],
+      q15_1: [30, 45, 18, 7], q15_2: [45, 35, 15, 5], q15_3: [30, 10, 35, 15, 8, 2, 0.3], q15_4: [20, 40, 30, 10],
+      q16_4: [35, 40, 25], q16_5: [55, 30, 15], q16_6: [15, 75, 10], q16_7: [12, 70, 18], q16_8: [10, 72, 18], q16_10: [70, 15, 15], q16_11: [35, 65],
+      q17_1: [35, 40, 18, 7], q17_3: [25, 45, 15, 3, 12], q17_5: [60, 18, 8, 2, 12], q17_6: [20, 45, 15, 10, 10, 0.3], q17_8: [30, 25, 20, 12, 13, 0.3],
+      q18_4: [55, 45], q18_5: [60, 25, 15], q18_6: [20, 45, 35], q18_7: [15, 45, 40], q18_8: [10, 50, 40], q18_9: [15, 45, 40],
+      q2_2_3: [80, 20], q2_2_4: [75, 25], q2_2_5: [60, 40], q2_2_6: [65, 35], q2_2_7: [70, 30], q2_2_9: [45, 40, 15],
+      q2_3_5: [35, 40, 25], q2_3_7: [55, 30, 15], q2_3_11: [60, 40],
     };
     // multi-choice: probability per option (exclusive "none" is used when nothing else is picked)
     const M = {
@@ -684,6 +671,12 @@
       q12_2_1: [0, 0.12, 0.18, 0.25, 0.06, 0.04, 0.02, 0.02], q12_3_1_1: [0.55, 0.65, 0.20, 0.85, 0.03], q12_3_1_2: [0, 0.25, 0.05, 0.12, 0.05],
       q12_4_2: [0.55, 0.70, 0.15, 0.30, 0.20, 0.02, 0.35, 0.02], q12_4_3: [0.65, 0.45, 0.12, 0.03], q12_4_4: [0, 0.55, 0.05, 0.35, 0.03],
       q14_1_1: [0.90, 0.45, 0.30, 0.05, 0.05], q4_3_1: [0.75, 0.15, 0.10, 0.08, 0.05], q4_2_2: [0.55, 0.15, 0.02, 0.60, 0.05], q3_4_3_who: [0.95, 0.02, 0.05],
+      q3_8_2: [0.55, 0.60, 0.35, 0.50, 0], q3_8_5: [0.80, 0.55, 0.20, 0.35, 0.15], q3_9_1: [0.08, 0.06, 0.07, 0.03, 0.15, 0], q3_9_2: [0.40, 0.85, 0.50, 0.20, 0.10, 0.08, 0.25, 0],
+      q15_5: [0.55, 0.40, 0.15, 0.25, 0.08, 0.12, 0.05, 0.08, 0.10, 0.15, 0.01], q15_6: [0.95, 0.15, 0.20, 0.40, 0.35],
+      q16_1: [0.70, 0.15, 0.08, 0.05, 0.10, 0.15, 0.30, 0.12, 0.02, 0], q16_2: [0.55, 0.35, 0.40, 0.20, 0.03, 0.01], q16_3: [0.30, 0.25, 0.15, 0.10, 0.25, 0.05, 0.35, 0.01],
+      q17_2: [0.55, 0.25, 0.45, 0.10, 0.30, 0.01, 0], q17_4: [0.20, 0.15, 0.08, 0.04, 0.10, 0.01, 0],
+      q18_1: [0.70, 0.10, 0.15, 0.05, 0.35, 0.02], q18_2: [0.25, 0.55, 0.70, 0.30, 0.45, 0.30], q18_3: [0.35, 0.15, 0.03, 0.25, 0.08, 0.20, 0],
+      q2_2_8: [0.45, 0.40, 0.55, 0.60, 0], q2_3_6: [0.30, 0.25, 0.45, 0.10, 0], q2_3_10: [0.70, 0.30, 0.25, 0.40, 0.15, 0.02, 0], q2_3_12: [0.25, 0.12, 0.20, 0.15, 0.12, 0.02, 0],
     };
     const GRID = {  // weights per scale option, by row id
       q8_1_1: [12, 88], q8_1_2: [14, 86],
@@ -710,7 +703,7 @@
       a.q1_2_age = computeAge(a) ?? age;
       a.q1_3 = Math.round(clamp(norm(male ? 165 : 154, 6), 135, 190));
       a.q1_4 = Math.round(clamp(norm((male ? 23.5 : 24.5) * (a.q1_3 / 100) ** 2, 9), 32, 120));
-      if (age >= 60 && R() < 0.75) W.q2_1 = [45, 10, 6, 1, 36, 0, 2]; else W.q2_1 = [55, 18, 9, 4, 8, 4, 2];
+      if (age >= 60 && R() < 0.75) W.q2_1 = [45, 10, 6, 1, 36, 0, 1, 2]; else W.q2_1 = [48, 16, 9, 4, 8, 4, 10, 2];
       // chronic disease risk rises with age
       const k = age < 40 ? 0.35 : age < 50 ? 0.7 : age < 60 ? 1 : age < 70 ? 1.35 : 1.6;
       const dis = [0.11 * k, 0.24 * k, 0.04 * k, 0.025 * k, 0.01, 0.035 * k, 0.012, 0.03, 0.15 * k, 0.02, 0.01, 0.02, 0.02, 0];
@@ -724,7 +717,7 @@
       for (let pass = 0; pass < 4; pass++) {
         for (const q of allQuestions) {
           if (!visible(q, a) || isAnswered(q, a)) continue;
-          if (q.type === "single") { a[q.id] = W[q.id] ? pickW(W[q.id]) : pickW(q.o.map((x) => (x.other ? 0.3 : 1))); const x = q.o[a[q.id] - 1]; if (x && x.other) a[`${q.id}__${x.v}`] = "ระบุ (จำลอง)"; }
+          if (q.type === "single") { const x = q.o[(W[q.id] && W[q.id].length === q.o.length ? pickW(W[q.id]) : pickW(q.o.map((o) => (o.other ? 0.3 : 1)))) - 1]; a[q.id] = x.v; if (x.other) a[`${q.id}__${x.v}`] = "ระบุ (จำลอง)"; }
           else if (q.type === "multi") {
             const ps = M[q.id] || q.o.map((x) => (x.exclusive ? 0 : 0.25));
             let pick = q.o.filter((x, j) => !x.exclusive && R() < (ps[j] || 0)).map((x) => x.v);
@@ -786,5 +779,5 @@
   const qs = new URLSearchParams(location.search);
   if (qs.get("mock")) mockRun(Math.min(500, Number(qs.get("mock")) || 100));
   else if (qs.get("selftest")) { localStorage.clear(); records = {}; selfTest().then(() => render()); }
-  else { render(); if (navigator.onLine) syncPending({ quiet: true }); }
+  else { render(); if (navigator.onLine) { syncPending({ quiet: true }); checkFormUpdate(); } }
 })();

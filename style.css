@@ -148,3 +148,6 @@ input.warn, .computed.warn { border-color: #d98e00; background: var(--warn-soft)
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.bad { background: var(--bad); color: #fff; }
 #selftest { white-space: pre-wrap; font: 12px ui-monospace, monospace; padding: 16px; }
+.pvbar { background: var(--warn-soft); color: var(--warn-ink); padding: 8px 16px; font-size: 14px; text-align: center; border-bottom: 1px solid var(--line); }
+.pvbar.new { background: var(--accent-soft); color: var(--accent); }
+.pvbar .btn { margin: 0 6px; }

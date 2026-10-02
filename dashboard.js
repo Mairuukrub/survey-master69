@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const S = window.SURVEY;
+  let S = window.SURVEY;  // replaced by the admin-published form once loaded
   const app = document.getElementById("app");
   const tip = document.getElementById("tip");
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -8,10 +8,15 @@
   let settings = { api: qp.get("api") || load("m69.settings", {}).api || "", team: qp.get("team") || load("m69.settings", {}).team || "" };
   let ALL = [];          // rows as objects keyed by column
   let source = "";
-  const F = { moo: "", sex: "", age: "", mock: true };
+  const F = { moo: "", sex: "", age: "", mock: true, sec: "s15" };
 
-  const Q = {};          // question id -> question (incl. grid rows)
-  S.sections.forEach((s) => s.q.forEach((q) => { Q[q.id] = q; if (q.rows) q.rows.forEach((r) => (Q[r.id] = { ...r, parent: q })); }));
+  let Q = {};            // question id -> question (incl. grid rows)
+  function indexForm() {
+    Q = {};
+    S.sections.forEach((s) => s.q.forEach((q) => { Q[q.id] = { ...q, section: s.id }; if (q.rows) q.rows.forEach((r) => (Q[r.id] = { ...r, parent: q })); }));
+    if (!S.sections.some((s) => s.id === F.sec)) F.sec = S.sections[S.sections.length - 1].id;
+  }
+  indexForm();
 
   // ------------------------------------------------------------ dom
   function h(tag, attrs, ...kids) {
@@ -70,15 +75,18 @@
   // single: share of each option among those who answered; multi: share ticking each option among those who answered
   function single(rows, id) {
     const q = Q[id], ans = rows.filter((r) => r[id] !== "" && r[id] != null);
+    if (!q || !q.o) return { d: 0, items: [] };
     return { d: ans.length, items: q.o.map((x) => ({ label: x.label, n: ans.filter((r) => Number(r[id]) === x.v).length })) };
   }
   function multi(rows, id, { dropNone = false } = {}) {
     const q = Q[id];
+    if (!q || !q.o) return { d: 0, items: [] };
     const ans = rows.filter((r) => q.o.some((x) => r[`${id}_o${x.v}`] !== "" && r[`${id}_o${x.v}`] != null));
     return { d: ans.length, items: q.o.filter((x) => !(dropNone && x.exclusive)).map((x) => ({ label: x.label, n: ans.filter((r) => String(r[`${id}_o${x.v}`]) === "1").length })) };
   }
   function gridShare(rows, gridId, codes) {
     const g = Q[gridId];
+    if (!g || !g.rows) return [];
     return g.rows.map((r) => { const ans = rows.filter((x) => x[r.id] !== "" && x[r.id] != null); return { label: r.t, n: ans.filter((x) => codes.includes(Number(x[r.id]))).length, d: ans.length }; });
   }
   const sortDesc = (items) => [...items].sort((a, b) => pct(b.n, b.d) - pct(a.n, a.d));
@@ -128,6 +136,46 @@
   const card = (title, sub, body, wide) => h("div", { class: "card" + (wide ? " wide" : "") }, h("h3", null, title), sub ? h("p", { class: "sub" }, sub) : null, body);
   const kpi = (v, k, s) => h("div", { class: "kpi" }, h("div", { class: "v" }, v), h("div", { class: "k" }, k), s ? h("div", { class: "s" }, s) : null);
   const section = (title, ...cards) => h("section", { class: "dsec" }, h("h2", null, title), h("div", { class: "cards" }, cards));
+
+  // one card per question, chosen by its type: works for any question the admin adds
+  function cardQ(rows, id, { title, sub, wide } = {}) {
+    const q = Q[id];
+    if (!q) return null;
+    const t = title || [q.no, q.t].filter(Boolean).join(" ");
+    if (q.type === "single") { const x = single(rows, id); return card(t, sub || `${x.d} คนที่ตอบ`, x.d ? bars(x.items, x.d, { sort: false }) : h("p", { class: "empty-c" }, "ยังไม่มีคำตอบ"), wide); }
+    if (q.type === "multi") {
+      const x = multi(rows, id, { dropNone: true }), none = q.o.find((o) => o.exclusive);
+      const nNone = none ? rows.filter((r) => String(r[`${id}_o${none.v}`]) === "1").length : 0;
+      return card(t, sub || `${x.d} คนที่ตอบ · ตอบได้หลายข้อ${none ? ` · ${none.label} ${fmtPct(nNone, x.d)}` : ""}`, x.d ? bars(x.items, x.d) : h("p", { class: "empty-c" }, "ยังไม่มีคำตอบ"), wide);
+    }
+    if (q.type === "grid") {
+      return card(t, sub || "ร้อยละของผู้ตอบแต่ละข้อย่อย", h("div", { style: "overflow-x:auto" }, h("table", { class: "tbl" },
+        h("thead", null, h("tr", null, h("th", null, ""), q.scale.map((x) => h("th", { class: "n" }, x.label)), h("th", { class: "n" }, "n"))),
+        h("tbody", null, q.rows.map((r) => {
+          const ans = rows.filter((x) => x[r.id] !== "" && x[r.id] != null);
+          return h("tr", null, h("td", null, r.t), q.scale.map((x) => h("td", { class: "n" }, fmtPct(ans.filter((y) => Number(y[r.id]) === x.v).length, ans.length))), h("td", { class: "n" }, ans.length));
+        })))), true);
+    }
+    if (q.type === "number") {
+      const v = rows.map((r) => num(r[id])).filter((x) => x != null && !Number.isNaN(x)).sort((a, b) => a - b);
+      if (!v.length) return card(t, sub, h("p", { class: "empty-c" }, "ยังไม่มีคำตอบ"));
+      const mean = v.reduce((a, b) => a + b, 0) / v.length, med = v[Math.floor((v.length - 1) / 2)];
+      const f = (x) => x.toLocaleString("th-TH", { maximumFractionDigits: 1 });
+      return card(t, sub || `${v.length} คนที่ตอบ${q.unit ? ` · หน่วย ${q.unit}` : ""}`, h("div", { class: "kpis" }, kpi(f(mean), "ค่าเฉลี่ย"), kpi(f(med), "มัธยฐาน"), kpi(`${f(v[0])}–${f(v[v.length - 1])}`, "ต่ำสุด–สูงสุด")));
+    }
+    return null;  // free text, dates: read them in the Sheet
+  }
+
+  function autoSection(R) {
+    const sec = S.sections.find((s) => s.id === F.sec) || S.sections[0];
+    const cards = sec.q.map((q) => cardQ(R, q.id)).filter(Boolean);
+    return h("section", { class: "dsec" },
+      h("h2", null, "สรุปรายข้อ (อัตโนมัติ ทุกข้อที่เป็นตัวเลือก/ตัวเลข)"),
+      h("div", { class: "filters", style: "position:static" }, h("label", null, "ส่วนของแบบสอบถาม",
+        h("select", { onchange: (e) => { F.sec = e.target.value; render(); } }, S.sections.map((s) => h("option", { value: s.id, selected: s.id === sec.id }, s.title))))),
+      h("p", { class: "fine" }, "ร้อยละคิดจากผู้ที่ตอบข้อนั้น (ข้อที่ถูกข้ามตามเงื่อนไขไม่นับ) · ข้อที่ผู้ดูแลเพิ่มภายหลังจะขึ้นที่นี่เอง"),
+      cards.length ? h("div", { class: "cards" }, cards) : h("p", { class: "empty" }, "ส่วนนี้ไม่มีข้อที่สรุปเป็นกราฟได้"));
+  }
 
   // ------------------------------------------------------------ the report
   function report() {
@@ -240,6 +288,46 @@
         card("ปัญหาในชุมชนที่ผู้ตอบรับรู้", "ร้อยละที่ตอบว่า ‘มี’", bars(gridShare(R, "q14_2", [2]), 0)),
         card("ช่องทางรับข่าวสารในหมู่บ้าน", null, bars(multi(R, "q14_1_1").items, multi(R, "q14_1_1").d))),
 
+      section("อาการไข้ (เพิ่มใน v2)",
+        cardQ(R, "q15_1"), cardQ(R, "q15_3", { title: "สิ่งที่ทำเป็นอันดับแรกเมื่อมีไข้" }),
+        cardQ(R, "q15_4", { title: "วัดอุณหภูมิก่อนตัดสินใจไปโรงพยาบาล" }),
+        cardQ(R, "q15_6", { title: "ความเข้าใจ: เมื่อไหร่เรียกว่า “มีไข้”", sub: "คำตอบที่ถูกคือ ตัวร้อน · ตอบได้หลายข้อ" })),
+
+      section("การใช้ยาแก้ปวดและความปลอดภัย (เพิ่มใน v2)",
+        cardQ(R, "q16_1", { title: "ยาแก้ปวดที่ใช้ใน 3 เดือน" }),
+        Q.q16_4 ? card("พฤติกรรมเสี่ยงในการใช้ยาแก้ปวด", "ร้อยละของผู้ที่ใช้ยาแก้ปวดและตอบข้อนั้น", bars([
+          { label: "ไม่อ่านฉลากก่อนใช้", n: R.filter(yes("q16_4", 3)).length, d: R.filter(answered("q16_4")).length },
+          { label: "ไม่ทราบ/ไม่แน่ใจขนาดยา", n: R.filter((r) => ["2", "3"].includes(String(r.q16_5))).length, d: R.filter(answered("q16_5")).length },
+          { label: "เคยกินเกินขนาด", n: R.filter(yes("q16_6", 1)).length, d: R.filter(answered("q16_6")).length },
+          { label: "เคยใช้ 2 ชนิดที่ตัวยาซ้ำกัน", n: R.filter(yes("q16_7", 1)).length, d: R.filter(answered("q16_7")).length },
+          { label: "เคยใช้ NSAIDs หลายตัวพร้อมกัน", n: R.filter(yes("q16_8", 1)).length, d: R.filter(answered("q16_8")).length },
+          { label: "เคยแบ่งยาให้คนอื่น", n: R.filter(yes("q16_11", 1)).length, d: R.filter(answered("q16_11")).length },
+        ], 0)) : null,
+        cardQ(R, "q16_3", { title: "ผู้แนะนำให้ใช้ยา" })),
+
+      section("ยาเสพติดและผู้ป่วยจิตเวชในชุมชน (เพิ่มใน v2)",
+        cardQ(R, "q17_1", { title: "พบเห็น/รับรู้ปัญหายาเสพติดใน 1 ปี" }),
+        cardQ(R, "q17_2", { title: "สารเสพติดที่พบหรือสงสัย" }),
+        cardQ(R, "q17_4", { title: "ผลกระทบต่อตนเอง/ครอบครัว" }),
+        cardQ(R, "q17_6", { title: "สิ่งที่ทำเมื่อพบผู้มีอาการคลั่ง" }),
+        cardQ(R, "q17_7", { title: "อุปสรรคการบำบัด" }),
+        cardQ(R, "q17_8", { title: "มาตรการที่ชาวบ้านเห็นว่าดีที่สุด" })),
+
+      section("แหล่งน้ำและโรงงานใกล้บ้าน (เพิ่มใน v2)",
+        cardQ(R, "q18_1", { title: "แหล่งน้ำที่ครัวเรือนใช้" }),
+        cardQ(R, "q18_3", { title: "สิ่งผิดปกติที่เคยพบในแหล่งน้ำ" }),
+        cardQ(R, "q18_5", { title: "มีโรงงานในระยะ 1 กม." }),
+        cardQ(R, "q18_4", { title: "เคยกินปลาจากแหล่งน้ำชุมชนใน 12 เดือน" })),
+
+      section("ผู้ป่วยเบาหวาน/ความดัน และอาชีพ (เพิ่มใน v2)",
+        cardQ(R, "q3_8_1", { title: "เบาหวาน: ความถี่ในการตรวจน้ำตาล" }),
+        cardQ(R, "q3_8_4", { title: "เบาหวาน: จัดการแผลเล็กที่เท้าอย่างไร" }),
+        cardQ(R, "q3_9_1", { title: "ความดัน: ภาวะแทรกซ้อนที่เคยมี" }),
+        cardQ(R, "q2_2_8", { title: "เกษตรกร: อุปกรณ์ป้องกันที่ใช้" }),
+        cardQ(R, "q2_3_12", { title: "พนักงานโรงงาน: อาการหลังทำงาน" })),
+
+      autoSection(R),
+
       section("คุณภาพการเก็บข้อมูล",
         card("รายผู้สัมภาษณ์", null, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", { class: "n" }, "ครัวเรือน"), h("th", { class: "n" }, "ตอบครบเฉลี่ย"))),
           h("tbody", null, Object.entries(ivs).sort((a, b) => b[1].length - a[1].length).map(([k, v]) => h("tr", null, h("td", null, k), h("td", { class: "n" }, v.length), h("td", { class: "n" }, `${(v.reduce((a, b) => a + b, 0) / v.length).toFixed(0)}%`)))))),
@@ -283,7 +371,11 @@
   async function start() {
     if (!settings.api || !settings.team) return setup();
     mount(app, h("main", { class: "wrap" }, h("p", null, "กำลังโหลดข้อมูล…")));
-    try { ALL = await fetchRows(); source = `Google Sheets ${ALL.length} แถว`; render(); }
+    try {
+      const [rows, pub] = await Promise.all([fetchRows(), M69.fetchPublished(settings.api, settings.team).catch(() => null)]);
+      if (pub && pub.form && !M69.validateForm(pub.form).length) { S = pub.form; indexForm(); }
+      ALL = rows; source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
+    }
     catch (e) { setup(`โหลดไม่สำเร็จ: ${e.message || e}`); }
   }
   start();

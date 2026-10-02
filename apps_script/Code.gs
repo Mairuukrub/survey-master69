@@ -11,10 +11,16 @@
  *
  * "Anyone" หมายถึงใครก็ส่งข้อมูลมาที่ URL นี้ได้ แต่ข้อมูลจะถูกบันทึกเฉพาะเมื่อรหัสทีมถูกต้อง
  * ตัว Sheet ยังเป็นของคุณคนเดียว (แชร์ให้ใครดูเองตามต้องการ)
+ *
+ * v2: ผู้ดูแลแก้แบบสอบถามได้จากหน้า admin.html → เก็บทุกเวอร์ชันไว้ในชีต "forms"
+ *     ต้องตั้ง ADMIN_CODE (คนละรหัสกับ TEAM_CODE ให้เฉพาะผู้ดูแล) แล้ว Deploy → Manage deployments → New version
  */
-const TEAM_CODE = "เปลี่ยนเป็นรหัสทีม";   // ← เปลี่ยนก่อน Deploy
+const TEAM_CODE = "เปลี่ยนเป็นรหัสทีม";        // ← เปลี่ยนก่อน Deploy (นักศึกษาทุกคนใช้)
+const ADMIN_CODE = "เปลี่ยนเป็นรหัสผู้ดูแล";    // ← เปลี่ยนก่อน Deploy (เฉพาะผู้แก้แบบสอบถาม ห้ามซ้ำกับ TEAM_CODE)
 const SHEET_NAME = "responses";
 const LOG_SHEET = "log";
+const FORM_SHEET = "forms";      // 1 แถว = 1 เวอร์ชัน: saved_at | version | note | sections | questions | json (แบ่งหลายช่อง)
+const CHUNK = 45000;             // 1 ช่องของ Google Sheets เก็บได้ไม่เกิน 50,000 ตัวอักษร
 
 function sheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -25,13 +31,45 @@ function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+// ---------------------------------------------------------------- questionnaire versions
+function formSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(FORM_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(FORM_SHEET);
+    sh.getRange(1, 1, 1, 6).setValues([["saved_at", "version", "note", "sections", "questions", "json (ต่อกันทุกช่องในแถว)"]]).setFontWeight("bold");
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function formRows_() {
+  const sh = formSheet_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+}
+const iso_ = (d) => (d instanceof Date ? d.toISOString() : String(d));
+function getForm_(version) {
+  const rows = formRows_();
+  const r = version ? rows.filter((x) => String(x[1]) === version).pop() : rows[rows.length - 1];
+  if (!r) return { ok: true, form: null };
+  return { ok: true, form: JSON.parse(r.slice(5).join("")), version: String(r[1]), saved_at: iso_(r[0]), note: String(r[2]) };
+}
+function formHistory_() {
+  return { ok: true, versions: formRows_().map((r) => ({ saved_at: iso_(r[0]), version: String(r[1]), note: String(r[2]), sections: r[3], questions: r[4] })) };
+}
+
 /**
- * GET ?token=…            = ทดสอบการเชื่อมต่อ (คืนแค่จำนวนแถว)
- * GET ?token=…&action=rows = ข้อมูลทั้งหมด สำหรับหน้าวิเคราะห์ (dashboard.html) — ต้องมีรหัสทีม
+ * GET ?token=…                     = ทดสอบการเชื่อมต่อ (คืนแค่จำนวนแถว)
+ * GET ?token=…&action=rows         = ข้อมูลทั้งหมด สำหรับหน้าวิเคราะห์ (dashboard.html) — ต้องมีรหัสทีม
+ * GET ?token=…&action=form         = แบบสอบถามเวอร์ชันล่าสุดที่ผู้ดูแลเผยแพร่ (form: null ถ้ายังไม่เคยเผยแพร่)
+ * GET ?token=…&action=form&version=v = เวอร์ชันที่ระบุ
+ * GET ?token=…&action=formHistory  = รายการเวอร์ชันทั้งหมด
  */
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
+  if (p.action === "form") return json_(getForm_(p.version));
+  if (p.action === "formHistory") return json_(formHistory_());
   const sh = sheet_();
   if (p.action === "rows") {
     const values = sh.getLastRow() > 0 ? sh.getDataRange().getDisplayValues() : [];
@@ -47,6 +85,15 @@ function doPost(e) {
   lock.waitLock(30000);
   try {
     const body = JSON.parse(e.postData.contents);
+    // admin page: every request carries the admin code in the POST body (never in the URL)
+    if (["checkAdmin", "getForm", "formHistory", "saveForm"].indexOf(body.action) >= 0) {
+      if (!adminReady_()) return json_({ ok: false, error: "ยังไม่ได้ตั้ง ADMIN_CODE ใน Apps Script (ต้องยาว 6 ตัวขึ้นไป และไม่ซ้ำกับรหัสทีม)" });
+      if (body.adminCode !== ADMIN_CODE) { log_(`${body.action}: wrong admin code`); return json_({ ok: false, error: "รหัสผู้ดูแลไม่ถูกต้อง" }); }
+      if (body.action === "checkAdmin") return json_({ ok: true });
+      if (body.action === "getForm") return json_(getForm_(body.version));
+      if (body.action === "formHistory") return json_(formHistory_());
+      return saveForm_(body);
+    }
     if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
     const recs = body.records || [];
     if (!recs.length) return json_({ ok: true, saved: [] });
@@ -87,6 +134,29 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function adminReady_() {
+  return ADMIN_CODE && ADMIN_CODE !== "เปลี่ยนเป็นรหัสผู้ดูแล" && ADMIN_CODE !== TEAM_CODE && ADMIN_CODE.length >= 6;
+}
+
+/** POST { action:"saveForm", adminCode, form:{version, title, sections:[…]}, note } — เพิ่มเป็นเวอร์ชันใหม่ ไม่ทับของเดิม */
+function saveForm_(body) {
+  const f = body.form;
+  if (!f || !f.version || !Array.isArray(f.sections) || !f.sections.length) return json_({ ok: false, error: "แบบสอบถามไม่ครบ (ต้องมี version และ sections)" });
+  const version = String(f.version).trim();
+  if (formRows_().some((r) => String(r[1]) === version)) return json_({ ok: false, error: `มีเวอร์ชัน “${version}” อยู่แล้ว ตั้งชื่อเวอร์ชันใหม่` });
+  const text = JSON.stringify(f);
+  const chunks = [];
+  for (let i = 0; i < text.length; i += CHUNK) chunks.push(text.slice(i, i + CHUNK));
+  const nq = f.sections.reduce((n, s) => n + ((s.q || []).length), 0);
+  const sh = formSheet_();
+  const row = [new Date(), version, String(body.note || "").slice(0, 500), f.sections.length, nq].concat(chunks);
+  const at = sh.getLastRow() + 1;
+  sh.getRange(at, 6, 1, chunks.length).setNumberFormat("@");   // keep JSON as plain text
+  sh.getRange(at, 1, 1, row.length).setValues([row]);
+  log_(`saveForm ${version} (${f.sections.length} sections, ${nq} questions, ${text.length} chars)`);
+  return json_({ ok: true, version: version, saved_at: row[0].toISOString() });
 }
 
 function log_(msg) {
