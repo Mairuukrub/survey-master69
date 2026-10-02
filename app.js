@@ -388,7 +388,8 @@
       h("header", { class: "top" },
         h("a", { class: "brand", href: "#/" }, h("span", { class: "mark" }, "44"), h("span", null, h("b", null, "แบบสัมภาษณ์ชุมชน"), h("small", null, "ฝึกภาคสนามร่วม ศวส. มข. ปีการศึกษา 2569"))),
         h("div", { class: "top-r" }, h("span", { id: "net", class: "net" }), extra)),
-      PREVIEW ? h("div", { class: "pvbar" }, `โหมดทดลองแบบสอบถามฉบับร่าง (${S.version}) — ข้อมูลที่กรอกไม่ถูกส่งและไม่ปนกับข้อมูลจริง`) : null,
+      PREVIEW ? h("div", { class: "pvbar" }, `โหมดทดลองแบบสอบถามฉบับร่าง (${S.version}) — ข้อมูลที่กรอกในโหมดนี้ไม่ถูกส่งเข้า Sheet `,
+        h("a", { class: "btn tiny", href: "index.html" }, "ไปแบบฟอร์มจริง")) : null,
       newFormVersion ? h("div", { class: "pvbar new" }, `มีแบบสอบถามเวอร์ชันใหม่ (${newFormVersion}) `,
         h("button", { class: "btn tiny", type: "button", onclick: () => location.reload() }, "โหลดใหม่"),
         " คำตอบที่กรอกไว้ยังอยู่ครบ") : null,
@@ -412,6 +413,9 @@
     mount(app,
       topbar(h("a", { class: "btn ghost", href: "#/settings" }, "ตั้งค่า")),
       h("main", { class: "wrap" },
+        !PREVIEW && previewCount() ? h("div", { class: "notice" },
+          `มีแบบสัมภาษณ์ ${previewCount()} ชุดที่กรอกไว้ในโหมดทดลอง (ยังไม่ถูกส่ง) `,
+          h("button", { class: "btn tiny", type: "button", onclick: movePreview }, "ย้ายมาเป็นข้อมูลจริง")) : null,
         noSetup ? h("div", { class: "notice" }, "ยังไม่ได้เชื่อมต่อ Google Sheets — สัมภาษณ์และบันทึกในเครื่องได้ตามปกติ แล้วตั้งค่าที่เมนู ", h("a", { href: "#/settings" }, "ตั้งค่า"), " ก่อนส่งข้อมูล") : null,
         h("div", { class: "hero" },
           h("button", { class: "btn primary big", type: "button", onclick: () => { const r = newRecord(); location.hash = `#/form/${r.uuid}/0`; } }, "+ สัมภาษณ์ครัวเรือนใหม่"),
@@ -426,6 +430,19 @@
         h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น"),
         h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ`)));
     updateNet();
+  }
+
+  // interviews filled in ?preview=1 live under their own key; let the user promote the ones with answers
+  const PREVIEW_KEY = "m69.preview.records";
+  const previewWithAnswers = () => Object.values(load(PREVIEW_KEY, {})).filter((r) => r.answers && (r.answers.h_house_no || progress(r.answers) > 5));
+  const previewCount = () => previewWithAnswers().length;
+  function movePreview() {
+    const moving = previewWithAnswers();
+    moving.forEach((r) => (records[r.uuid] = { ...r, status: r.status === "ready" ? "ready" : "draft" }));
+    saveRecords();
+    store(PREVIEW_KEY, {});
+    toast(`ย้ายมาแล้ว ${moving.length} ชุด — ชุดที่ยังเป็นฉบับร่างให้เปิดไปกด “ตรวจทานและส่ง”`);
+    render();
   }
 
   function recordRow(r) {
@@ -531,7 +548,7 @@
         : h("div", { class: "notice good" }, "ตอบครบทุกข้อแล้ว"),
       h("div", { class: "pager" },
         h("button", { class: "btn", type: "button", onclick: () => finish(false) }, "บันทึก (ส่งทีหลัง)"),
-        h("button", { class: "btn primary", type: "button", onclick: () => finish(true), disabled: !settings.api || !settings.team }, "บันทึกและส่งเลย")),
+        h("button", { class: "btn primary", type: "button", onclick: () => finish(true), disabled: PREVIEW || !settings.api || !settings.team }, PREVIEW ? "ส่งไม่ได้ในโหมดทดลอง" : "บันทึกและส่งเลย")),
       !settings.api || !settings.team ? h("p", { class: "fine" }, "ยังไม่ได้ตั้งค่าการเชื่อมต่อ Google Sheets จึงบันทึกไว้ในเครื่องก่อนได้") : null);
   }
 
