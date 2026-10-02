@@ -100,6 +100,8 @@
     const text = await res.text();
     let d;
     try { d = JSON.parse(text); } catch { throw new Error("ตอบกลับไม่ใช่ JSON — ตรวจ URL (ต้องลงท้ายด้วย /exec) และ Deploy Apps Script เวอร์ชันใหม่แล้วหรือยัง"); }
+    // the old (v1) Apps Script does not know admin actions and answers with its team-code error
+    if (!d.ok && d.error === "รหัสทีมไม่ถูกต้อง") throw new Error("Apps Script ยังเป็นเวอร์ชันเก่า — วางโค้ด Code.gs ฉบับใหม่ ตั้ง ADMIN_CODE แล้ว Deploy เป็น New version ก่อน");
     if (!d.ok) throw new Error(d.error || "ไม่สำเร็จ");
     return d;
   }
