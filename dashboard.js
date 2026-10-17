@@ -64,6 +64,7 @@
     return rows.filter((r) => r.length > 1).map((r) => Object.fromEntries(header.map((k, i) => [k, r[i] ?? ""])));
   }
 
+  const withDerived = (rows) => rows.map((r) => ({ ...r, ...M69A.derive(r, S) }));
   const isMock = (r) => String(r.record_id || "").startsWith("MOCK") || r.iv_zone === "MOCK";
   function filtered() {
     return ALL.filter((r) => (F.mock || !isMock(r))
@@ -186,17 +187,17 @@
     const yes = (id, v) => (r) => String(r[id]) === String(v);
     const hasOpt = (id, v) => (r) => String(r[`${id}_o${v}`]) === "1";
     const answered = (id) => (r) => r[id] !== "" && r[id] != null;
-    const disAns = R.filter((r) => r.q3_1_o1 !== "" && r.q3_1_o1 != null);
-    const chronic = disAns.filter((r) => String(r.q3_1_o14) !== "1");
-    const smokeAns = R.filter(answered("q4_1")), smokers = smokeAns.filter((r) => ["1", "2"].includes(String(r.q4_1)));
-    const phqAns = R.filter((r) => r.q8_1_1 !== "" || r.q8_1_2 !== ""), phqPos = phqAns.filter((r) => String(r.q8_1_1) === "1" || String(r.q8_1_2) === "1");
-    const bmi = R.map((r) => num(r.bmi)).filter((x) => x != null && x > 10 && x < 70);
+    // KPI definitions live in analysis.js (M69A.DERIVED) so the exported data gives the same numbers
+    const has = (k) => R.filter((r) => r[k] !== "" && r[k] != null), is1 = (k) => R.filter((r) => r[k] === 1);
+    const disAns = has("ncd_any"), chronic = is1("ncd_any");
+    const smokeAns = has("smoke_cur"), smokers = is1("smoke_cur");
+    const phqAns = has("phq2_pos"), phqPos = is1("phq2_pos");
+    const bmiAns = has("bmi_cat"), obese = is1("obese");
     const dm = R.filter(hasOpt("q3_1", 1)), ht = R.filter(hasOpt("q3_1", 2));
     const pain = multi(R, "q7_1", { dropNone: true });
-    const painAny = R.filter((r) => r.q7_1_o1 !== "" && String(r.q7_1_o1) !== "1");
+    const painAny = is1("msk_pain");
     const farmer = R.filter(yes("q2_1", 1)), notFarmer = R.filter((r) => r.q2_1 !== "" && String(r.q2_1) !== "1");
     const painIn = (g) => ({ n: g.filter((r) => r.q7_1_o1 !== "" && String(r.q7_1_o1) !== "1").length, d: g.filter((r) => r.q7_1_o1 !== "").length });
-    const bmiCats = [["น้อยกว่า 18.5 (ผอม)", (b) => b < 18.5], ["18.5–22.9 (ปกติ)", (b) => b >= 18.5 && b < 23], ["23–24.9 (ท้วม)", (b) => b >= 23 && b < 25], ["25–29.9 (อ้วนระดับ 1)", (b) => b >= 25 && b < 30], ["30 ขึ้นไป (อ้วนระดับ 2)", (b) => b >= 30]];
     const ivs = {};
     R.forEach((r) => { const k = [r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ"; (ivs[k] = ivs[k] || []).push(num(r.complete_pct) || 0); });
     const dates = {};
@@ -212,7 +213,7 @@
         kpi(age.length ? (age.reduce((a, b) => a + b, 0) / age.length).toFixed(1) : "–", "อายุเฉลี่ยผู้ให้ข้อมูล (ปี)"),
         kpi(fmtPct(age.filter((a) => a >= 60).length, age.length), "อายุ 60 ปีขึ้นไป"),
         kpi(fmtPct(chronic.length, disAns.length), "มีโรคประจำตัว", `${chronic.length}/${disAns.length} คน`),
-        kpi(fmtPct(bmi.filter((b) => b >= 25).length, bmi.length), "BMI ≥ 25 (อ้วน)", `${bmi.filter((b) => b >= 25).length}/${bmi.length} คน`),
+        kpi(fmtPct(obese.length, bmiAns.length), "BMI ≥ 25 (อ้วน)", `${obese.length}/${bmiAns.length} คน`),
         kpi(fmtPct(smokers.length, smokeAns.length), "สูบบุหรี่ปัจจุบัน", `${smokers.length}/${smokeAns.length} คน`),
         kpi(fmtPct(phqPos.length, phqAns.length), "คัดกรองซึมเศร้า (PHQ-2) ผลบวก", `${phqPos.length}/${phqAns.length} คน`),
         kpi(fmtPct(painAny.length, pain.d), "ปวดกล้ามเนื้อใน 3 เดือน", `${painAny.length}/${pain.d} คน`)),
@@ -225,7 +226,7 @@
 
       section("สุขภาพร่างกาย",
         card("โรคที่แพทย์เคยวินิจฉัย", "ร้อยละของผู้ตอบ · ตอบได้หลายข้อ", bars(multi(R, "q3_1", { dropNone: true }).items, multi(R, "q3_1").d)),
-        card("ดัชนีมวลกาย (BMI)", "เกณฑ์คนเอเชีย", bars(bmiCats.map(([label, t]) => ({ label, n: bmi.filter(t).length })), bmi.length, { sort: false })),
+        card("ดัชนีมวลกาย (BMI)", "เกณฑ์คนเอเชีย", bars(M69A.BMI_CATS.map(([, label], i) => ({ label, n: R.filter((r) => r.bmi_cat === i + 1).length })), bmiAns.length, { sort: false })),
         card("การดูแลตัวเองของผู้ป่วยเบาหวานและความดัน", `เบาหวาน ${dm.length} คน · ความดัน ${ht.length} คน`, bars([
           { label: "เบาหวาน: กินยาทุกวัน", n: dm.filter(yes("q3_4_2_1", 1)).length, d: dm.filter(answered("q3_4_2_1")).length },
           { label: "เบาหวาน: ตรวจทุก 1–3 เดือน", n: dm.filter((r) => ["1", "2"].includes(String(r.q3_4_2_3))).length, d: dm.filter(answered("q3_4_2_3")).length },
@@ -246,7 +247,7 @@
           ["ไม่ออกกำลังกายเลย", yes("q4_3", 1), answered("q4_3")],
           ["ชอบรสเค็ม", yes("q10_1", 1), answered("q10_1")],
           ["เติมเครื่องปรุงทุกมื้อ", yes("q10_2", 1), answered("q10_2")],
-          ["BMI ≥ 25", (r) => num(r.bmi) >= 25, (r) => num(r.bmi) != null],
+          ["BMI ≥ 25", (r) => r.obese === 1, (r) => r.obese !== "" && r.obese != null],
         ]), true),
         card("พฤติกรรมการกิน: ทำ 4 วันขึ้นไปต่อสัปดาห์", "ร้อยละที่ตอบ ‘เป็นประจำ’ หรือ ‘บางครั้ง (4–6 วัน)’", bars(gridShare(R, "q10_grid", [1, 2]), 0), true)),
 
@@ -352,13 +353,54 @@
           mockN ? h("label", { class: "chk" }, h("input", { type: "checkbox", checked: F.mock, onchange: (e) => { F.mock = e.target.checked; render(); } }), `รวมข้อมูลจำลอง (${mockN})`) : null,
           h("span", { class: "meta" }, `${source} · โหลดเมื่อ ${new Date().toLocaleTimeString("th-TH")}`)),
         mockN && F.mock ? h("div", { class: "mockbar" }, `มีข้อมูลจำลอง (MOCK) ${mockN} ครัวเรือน — ตัวเลขยังไม่ใช่ผลจริง ลบแถวที่ record_id ขึ้นต้นด้วย MOCK ใน Sheet ก่อนเก็บข้อมูลจริง`) : null,
+        exportPanel(),
         report()));
+  }
+
+  // ------------------------------------------------------------ analysis-ready downloads (analysis.js)
+  let exportDeid = true, exportOpen = false;
+  const sessionSalt = Math.random().toString(36).slice(2);   // no team code (CSV opened from file): pseudonyms still can't be reversed
+  function saveFile(name, text, type, bom) {
+    const blob = new Blob([(bom ? "\ufeff" : "") + text], { type });
+    const a = h("a", { href: URL.createObjectURL(blob), download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function exportPanel() {
+    const real = ALL.filter((r) => !isMock(r));
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const base = `m69_${exportDeid ? "deid" : "full"}_${stamp}`;
+    const FILES = {
+      csv: ["ข้อมูล (CSV / Excel)", (ds) => [`${base}.csv`, M69A.toCsv(ds), "text/csv;charset=utf-8", true]],
+      codebook: ["Codebook", (ds) => [`${base}_codebook.csv`, M69A.codebookCsv(ds, { deid: exportDeid }), "text/csv;charset=utf-8", true]],
+      spss: ["SPSS (.sps)", (ds) => [`${base}_spss.sps`, M69A.spss(ds, `${base}.csv`), "text/plain;charset=utf-8", true]],
+      stata: ["Stata (.do)", (ds) => [`${base}_stata.do`, M69A.stata(ds, `${base}.csv`), "text/plain;charset=utf-8", false]],
+      r: ["R (.R)", (ds) => [`${base}_r.R`, M69A.rScript(ds, `${base}.csv`), "text/plain;charset=utf-8", false]],
+    };
+    const run = async (keys) => {
+      const ds = await M69A.build(real, S, { deid: exportDeid, salt: settings.team || sessionSalt });
+      keys.forEach((k, i) => setTimeout(() => saveFile(...FILES[k][1](ds)), i * 400));
+    };
+    const pick = (deid, label, sub) => h("label", { class: "xopt" + (exportDeid === deid ? " on" : "") },
+      h("input", { type: "radio", name: "xdeid", checked: exportDeid === deid, onchange: () => { exportDeid = deid; render(); } }),
+      h("span", null, h("b", null, label), h("small", null, sub)));
+    return h("details", { class: "xpanel", open: exportOpen, ontoggle: (e) => (exportOpen = e.target.open) },
+      h("summary", null, "ดาวน์โหลดข้อมูลสำหรับวิเคราะห์ ", h("small", null, "SPSS · Stata · R · Excel")),
+      h("div", { class: "xbody" },
+        h("div", { class: "xopts" },
+          pick(true, "ไม่ระบุตัวตน (แนะนำ)", "ตัดบ้านเลขที่ ชื่อหมู่บ้าน วันเกิด ชื่อผู้สัมภาษณ์ และข้อความอิสระออก ใช้รหัสนิรนามแทน — ส่งต่อให้ผู้วิเคราะห์ได้"),
+          pick(false, "ข้อมูลเต็ม", "มีข้อมูลระบุตัวตน ใช้ภายในทีมเท่านั้น ห้ามเผยแพร่")),
+        h("p", { class: "fine" }, `${real.length.toLocaleString("th-TH")} ครัวเรือน (ไม่รวมข้อมูลจำลอง) · ช่องตัวเลขที่ว่าง: -1 = ข้ามตามเงื่อนไข, -9 = ไม่ได้ตอบ · มีตัวแปรคำนวณ ${M69A.DERIVED.length} ตัว (กลุ่มอายุ BMI โรคประจำตัว PHQ-2 ฯลฯ) นิยามเดียวกับตัวเลขในหน้านี้`),
+        h("div", { class: "xbtns" },
+          h("button", { class: "btn primary", type: "button", disabled: !real.length, onclick: () => run(Object.keys(FILES)) }, "ดาวน์โหลดทั้งชุด (5 ไฟล์)"),
+          Object.entries(FILES).map(([k, [label]]) => h("button", { class: "btn", type: "button", disabled: !real.length, onclick: () => run([k]) }, label))),
+        h("p", { class: "fine" }, "วางไฟล์ทั้งหมดไว้โฟลเดอร์เดียวกัน แล้วเปิดไฟล์ syntax ของโปรแกรมที่ใช้ — ชื่อตัวแปร ชื่อคำตอบ และรหัสสูญหายถูกตั้งให้ครบ")));
   }
 
   function setup(msg) {
     const url = h("input", { type: "url", value: settings.api, placeholder: "https://script.google.com/macros/s/…/exec" });
     const team = h("input", { type: "text", value: settings.team, placeholder: "รหัสทีม" });
-    const file = h("input", { type: "file", accept: ".csv,text/csv", onchange: async (e) => { const f = e.target.files[0]; if (!f) return; ALL = parseCsv(await f.text()); source = `ไฟล์ ${f.name}`; render(); } });
+    const file = h("input", { type: "file", accept: ".csv,text/csv", onchange: async (e) => { const f = e.target.files[0]; if (!f) return; ALL = withDerived(parseCsv(await f.text())); source = `ไฟล์ ${f.name}`; render(); } });
     mount(app, h("main", { class: "wrap setup" },
       h("h1", null, "สรุปผลแบบสัมภาษณ์ชุมชน"),
       msg ? h("div", { class: "notice bad" }, msg) : null,
@@ -374,7 +416,7 @@
     try {
       const [rows, pub] = await Promise.all([fetchRows(), M69.fetchPublished(settings.api, settings.team).catch(() => null)]);
       if (pub && pub.form && !M69.validateForm(pub.form).length) { S = pub.form; indexForm(); }
-      ALL = rows; source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
+      ALL = withDerived(rows); source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
     }
     catch (e) { setup(`โหลดไม่สำเร็จ: ${e.message || e}`); }
   }
