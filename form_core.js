@@ -40,6 +40,7 @@
   const META = [
     ["uuid", "รหัสระบบ (ไม่ซ้ำ)"], ["record_id", "รหัสแบบสอบถาม"], ["form_version", "เวอร์ชันแบบฟอร์ม"],
     ["created_at", "สร้างเมื่อ"], ["updated_at", "แก้ไขล่าสุด"], ["submitted_at", "ส่งเมื่อ"], ["complete_pct", "ตอบครบ (%)"],
+    ["started_at", "เริ่มสัมภาษณ์ (กรอกคำตอบแรก)"], ["finished_at", "สัมภาษณ์เสร็จ (กดบันทึกครั้งแรก)"], ["duration_min", "ใช้เวลาสัมภาษณ์ (นาที)"],
   ];
   const questions = (form) => form.sections.flatMap((s) => s.q.map((q) => ({ ...q, section: s.id })));
   function columnSpec(form) {

@@ -57,14 +57,14 @@
 
   // ---------------------------------------------------------------- column dictionary
   // kind: "num" | "str" · miss(ctx): which missing code a blank numeric cell gets
-  const META_NUM = new Set(["complete_pct"]);
-  const AREA_KEEP = new Set(["form_version", "created_at", "updated_at", "submitted_at", "complete_pct", "h_tambon", "h_amphoe", "h_province", "iv_faculty", "iv_zone", "iv_date"]);
+  const META_NUM = new Set(["complete_pct", "duration_min"]);
+  const AREA_KEEP = new Set(["form_version", "created_at", "updated_at", "submitted_at", "complete_pct", "started_at", "finished_at", "duration_min", "h_tambon", "h_amphoe", "h_province", "iv_faculty", "iv_zone", "iv_date"]);
   function dictionary(form) {
     const labels = new Map(M69.columnSpec(form).map((c) => [c.key, c]));
     const cols = [];
     const add = (key, kind, extra = {}) => { const c = labels.get(key) || {}; cols.push({ key, kind, label: c.label || key, q: c.q || "", source: "question", ...extra }); };
     const byVis = (q) => (ctx) => (ctx.vis(q) ? MISS.na : MISS.skip);
-    ["uuid", "record_id", "form_version", "created_at", "updated_at", "submitted_at", "complete_pct"]
+    ["uuid", "record_id", "form_version", "created_at", "updated_at", "submitted_at", "complete_pct", "started_at", "finished_at", "duration_min"]
       .forEach((k) => add(k, META_NUM.has(k) ? "num" : "str", { source: "meta" }));
     for (const q of M69.questions(form)) {
       const lab = (o) => o.map((x) => [x.v, x.label]);

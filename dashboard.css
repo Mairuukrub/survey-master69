@@ -71,3 +71,4 @@
 .xbtns .btn { min-height: 40px; font-size: 14px; }
 .xbody .fine { margin: 0; }
 @media (max-width: 560px) { .xopts { grid-template-columns: 1fr; } }
+.tbl td.flag { color: var(--bad); font-weight: 700; }

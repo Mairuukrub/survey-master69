@@ -151,3 +151,35 @@ input.warn, .computed.warn { border-color: #d98e00; background: var(--warn-soft)
 .pvbar { background: var(--warn-soft); color: var(--warn-ink); padding: 8px 16px; font-size: 14px; text-align: center; border-bottom: 1px solid var(--line); }
 .pvbar.new { background: var(--accent-soft); color: var(--accent); }
 .pvbar .btn { margin: 0 6px; }
+
+/* v3: soft checks, review links, home filters, help */
+.qwarn { margin-top: 10px; padding: 8px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn-ink); font-size: 14px; line-height: 1.45; display: grid; gap: 2px; }
+.qwarn[hidden] { display: none; }
+.q.flash { animation: qflash 1.6s ease-out; }
+@keyframes qflash { 0%, 30% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .q.flash { animation: none; outline: 3px solid var(--accent); } }
+button.stat { font: inherit; color: inherit; text-align: left; cursor: pointer; width: 100%; }
+button.stat:hover { border-color: var(--muted); }
+.stat.on { border-color: var(--accent); background: var(--accent-soft); }
+.stat.on span { color: var(--accent); }
+.listhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.search { width: 100%; min-height: 46px; padding: 9px 14px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 16px; margin: 0 0 10px; }
+.chip.dup { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.review .rv.warn { border-left: 4px solid var(--warn-ink); }
+.review .qlinks { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; font-size: 13.5px; }
+.review .rv .qlinks a { display: inline; font-weight: 500; }
+.help .lead { color: var(--ink-2); }
+.help-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; margin: 14px 0; }
+.help-card h2 { margin: 0 0 8px; font-size: 16px; }
+.help-card ol, .help-card ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 15px; }
+.help-card.dont { border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.help-card.dont h2 { color: var(--bad); }
+.help-card dl { margin: 0; font-size: 15px; }
+.help-card dt { font-weight: 600; margin-top: 8px; }
+.help-card dd { margin: 2px 0 0; color: var(--ink-2); }
+.status-list { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 6px; font-size: 14.5px; }
+.status-list li { padding: 8px 12px 8px 34px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); position: relative; }
+.status-list li::before { content: "•"; position: absolute; left: 13px; color: var(--muted); font-weight: 700; }
+.status-list li.ok::before { content: "✓"; color: var(--good-ink); }
+.status-list li.no { background: var(--warn-soft); color: var(--warn-ink); border-color: transparent; }
+.status-list li.no::before { content: "!"; color: var(--warn-ink); }

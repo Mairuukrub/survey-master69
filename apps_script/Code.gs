@@ -3,7 +3,7 @@
  *
  * วิธีติดตั้ง (ทำครั้งเดียว):
  *   1. สร้าง Google Sheet ใหม่ → เมนู ส่วนขยาย (Extensions) → Apps Script
- *   2. ลบโค้ดเดิม วางไฟล์นี้ทั้งไฟล์ แล้วเปลี่ยน TEAM_CODE ด้านล่างเป็นรหัสของทีม
+ *   2. ลบโค้ดเดิม วางไฟล์นี้ทั้งไฟล์ แล้วเปลี่ยน TEAM_CODE, READ_CODE (และ ADMIN_CODE ถ้าจะแก้แบบสอบถาม) ด้านล่าง
  *   3. กด Deploy → New deployment → เลือกชนิด Web app
  *        Execute as: Me   ·   Who has access: Anyone
  *   4. กด Deploy → อนุญาตสิทธิ์ (Authorize) → คัดลอก Web app URL (ลงท้ายด้วย /exec)
@@ -14,9 +14,12 @@
  *
  * v2: ผู้ดูแลแก้แบบสอบถามได้จากหน้า admin.html → เก็บทุกเวอร์ชันไว้ในชีต "forms"
  *     ต้องตั้ง ADMIN_CODE (คนละรหัสกับ TEAM_CODE ให้เฉพาะผู้ดูแล) แล้ว Deploy → Manage deployments → New version
+ * v3: รหัส 3 ระดับ — รหัสทีมส่งข้อมูลได้อย่างเดียว อ่านข้อมูลดิบไม่ได้ (ข้อมูลสุขภาพ, PDPA)
+ *     หน้าวิเคราะห์ใช้ READ_CODE (หรือ ADMIN_CODE) และส่งรหัสใน POST body ไม่ใส่ใน URL
  */
-const TEAM_CODE = "เปลี่ยนเป็นรหัสทีม";        // ← เปลี่ยนก่อน Deploy (นักศึกษาทุกคนใช้)
-const ADMIN_CODE = "เปลี่ยนเป็นรหัสผู้ดูแล";    // ← เปลี่ยนก่อน Deploy (เฉพาะผู้แก้แบบสอบถาม ห้ามซ้ำกับ TEAM_CODE)
+const TEAM_CODE = "เปลี่ยนเป็นรหัสทีม";        // ← นักศึกษาทุกคนใช้: ส่งข้อมูล + โหลดแบบสอบถาม (อ่านข้อมูลที่ส่งแล้วไม่ได้)
+const READ_CODE = "เปลี่ยนเป็นรหัสดูผล";      // ← หัวหน้าทีม/อาจารย์: เปิดหน้าวิเคราะห์และดาวน์โหลดข้อมูล (ยาว 6 ตัวขึ้นไป ห้ามซ้ำกับ TEAM_CODE)
+const ADMIN_CODE = "เปลี่ยนเป็นรหัสผู้ดูแล";    // ← ผู้แก้แบบสอบถาม: ทำได้ทุกอย่าง (ยาว 6 ตัวขึ้นไป ห้ามซ้ำกับรหัสอื่น)
 const SHEET_NAME = "responses";
 const LOG_SHEET = "log";
 const FORM_SHEET = "forms";      // 1 แถว = 1 เวอร์ชัน: saved_at | version | note | sections | questions | json (แบ่งหลายช่อง)
@@ -60,7 +63,6 @@ function formHistory_() {
 
 /**
  * GET ?token=…                     = ทดสอบการเชื่อมต่อ (คืนแค่จำนวนแถว)
- * GET ?token=…&action=rows         = ข้อมูลทั้งหมด สำหรับหน้าวิเคราะห์ (dashboard.html) — ต้องมีรหัสทีม
  * GET ?token=…&action=form         = แบบสอบถามเวอร์ชันล่าสุดที่ผู้ดูแลเผยแพร่ (form: null ถ้ายังไม่เคยเผยแพร่)
  * GET ?token=…&action=form&version=v = เวอร์ชันที่ระบุ
  * GET ?token=…&action=formHistory  = รายการเวอร์ชันทั้งหมด
@@ -70,21 +72,31 @@ function doGet(e) {
   if (p.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
   if (p.action === "form") return json_(getForm_(p.version));
   if (p.action === "formHistory") return json_(formHistory_());
+  if (p.action === "rows") return json_({ ok: false, error: "หน้าวิเคราะห์ต้องใช้รหัสดูผล (READ_CODE) — โหลดหน้าวิเคราะห์เวอร์ชันใหม่" });
   const sh = sheet_();
-  if (p.action === "rows") {
-    const values = sh.getLastRow() > 0 ? sh.getDataRange().getDisplayValues() : [];
-    const header = values.shift() || [];
-    return json_({ ok: true, header: header, rows: values });
-  }
   return json_({ ok: true, rows: Math.max(0, sh.getLastRow() - 1) });
+}
+
+/** POST { action:"rows" | "publishedForm", readCode } — หน้าวิเคราะห์ (ไม่ต้องรอ lock เพราะอ่านอย่างเดียว) */
+function readAction_(body) {
+  if (!codeReady_(READ_CODE, "เปลี่ยนเป็นรหัสดูผล") && !adminReady_()) return json_({ ok: false, error: "ยังไม่ได้ตั้ง READ_CODE ใน Apps Script (ยาว 6 ตัวขึ้นไป และไม่ซ้ำกับรหัสทีม)" });
+  const ok = (codeReady_(READ_CODE, "เปลี่ยนเป็นรหัสดูผล") && body.readCode === READ_CODE) || (adminReady_() && body.readCode === ADMIN_CODE);
+  if (!ok) { log_(`${body.action}: wrong read code`); return json_({ ok: false, error: "รหัสดูผลไม่ถูกต้อง" }); }
+  if (body.action === "publishedForm") return json_(getForm_());
+  const sh = sheet_();
+  const values = sh.getLastRow() > 0 ? sh.getDataRange().getDisplayValues() : [];
+  const header = values.shift() || [];
+  return json_({ ok: true, header: header, rows: values });
 }
 
 /** POST = รับข้อมูล: { token, columns:[...], textColumns:[...], records:[{uuid,...}, ...] } */
 function doPost(e) {
+  let body;
+  try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: "คำขอไม่ถูกต้อง" }); }
+  if (body.action === "rows" || body.action === "publishedForm") return readAction_(body);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const body = JSON.parse(e.postData.contents);
     // admin page: every request carries the admin code in the POST body (never in the URL)
     if (["checkAdmin", "getForm", "formHistory", "saveForm"].indexOf(body.action) >= 0) {
       if (!adminReady_()) return json_({ ok: false, error: "ยังไม่ได้ตั้ง ADMIN_CODE ใน Apps Script (ต้องยาว 6 ตัวขึ้นไป และไม่ซ้ำกับรหัสทีม)" });
@@ -136,8 +148,12 @@ function doPost(e) {
   }
 }
 
+// a code is usable once it was changed from the placeholder, is long enough and differs from the team code
+function codeReady_(code, placeholder) {
+  return !!code && code !== placeholder && code !== TEAM_CODE && code.length >= 6;
+}
 function adminReady_() {
-  return ADMIN_CODE && ADMIN_CODE !== "เปลี่ยนเป็นรหัสผู้ดูแล" && ADMIN_CODE !== TEAM_CODE && ADMIN_CODE.length >= 6;
+  return codeReady_(ADMIN_CODE, "เปลี่ยนเป็นรหัสผู้ดูแล") && ADMIN_CODE !== READ_CODE;
 }
 
 /** POST { action:"saveForm", adminCode, form:{version, title, sections:[…]}, note } — เพิ่มเป็นเวอร์ชันใหม่ ไม่ทับของเดิม */

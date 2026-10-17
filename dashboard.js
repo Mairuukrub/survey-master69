@@ -5,7 +5,17 @@
   const tip = document.getElementById("tip");
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
   const qp = new URLSearchParams(location.search);
-  let settings = { api: qp.get("api") || load("m69.settings", {}).api || "", team: qp.get("team") || load("m69.settings", {}).team || "" };
+  // the read code opens raw health data: kept for this tab only unless the user ticks "remember on this device"
+  const READ_KEY = "m69.readCode";
+  const getRead = () => { try { return sessionStorage.getItem(READ_KEY) || localStorage.getItem(READ_KEY) || ""; } catch { return ""; } };
+  function setRead(code, remember) {
+    try {
+      sessionStorage.setItem(READ_KEY, code);
+      if (remember) localStorage.setItem(READ_KEY, code); else localStorage.removeItem(READ_KEY);
+    } catch { /* private mode */ }
+  }
+  function forgetRead() { try { sessionStorage.removeItem(READ_KEY); localStorage.removeItem(READ_KEY); } catch { /* private mode */ } }
+  let settings = { api: qp.get("api") || load("m69.settings", {}).api || "", read: getRead() };
   let ALL = [];          // rows as objects keyed by column
   let source = "";
   const F = { moo: "", sex: "", age: "", mock: true, sec: "s15" };
@@ -43,10 +53,20 @@
   }
 
   // ------------------------------------------------------------ data
+  // the read code travels in the POST body, never in the URL (browser history, proxy logs)
+  async function post(payload) {
+    const res = await fetch(settings.api, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ ...payload, readCode: settings.read }) });
+    let d;
+    try { d = JSON.parse(await res.text()); } catch { throw new Error("ตอบกลับไม่ใช่ JSON — ตรวจ URL ของ Apps Script (ต้องลงท้ายด้วย /exec)"); }
+    if (!d.ok) {
+      // the v2 script treats an unknown POST as a submission and answers with the team-code error
+      if (d.error === "รหัสทีมไม่ถูกต้อง") throw new Error("Apps Script ยังเป็นเวอร์ชันเก่า — วางโค้ดใหม่จาก apps_script/Code.gs ตั้ง READ_CODE แล้ว Deploy → Manage deployments → New version");
+      throw new Error(d.error || "อ่านข้อมูลไม่สำเร็จ");
+    }
+    return d;
+  }
   async function fetchRows() {
-    const res = await fetch(`${settings.api}?token=${encodeURIComponent(settings.team)}&action=rows`);
-    const d = await res.json();
-    if (!d.ok) throw new Error(d.error || "อ่านข้อมูลไม่สำเร็จ");
+    const d = await post({ action: "rows" });
     return d.header.length ? d.rows.map((r) => Object.fromEntries(d.header.map((k, i) => [k, r[i]]))) : [];
   }
   function parseCsv(text) {
@@ -199,7 +219,18 @@
     const farmer = R.filter(yes("q2_1", 1)), notFarmer = R.filter((r) => r.q2_1 !== "" && String(r.q2_1) !== "1");
     const painIn = (g) => ({ n: g.filter((r) => r.q7_1_o1 !== "" && String(r.q7_1_o1) !== "1").length, d: g.filter((r) => r.q7_1_o1 !== "").length });
     const ivs = {};
-    R.forEach((r) => { const k = [r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ"; (ivs[k] = ivs[k] || []).push(num(r.complete_pct) || 0); });
+    R.forEach((r) => {
+      const k = [r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ";
+      const x = (ivs[k] = ivs[k] || { pct: [], min: [] });
+      x.pct.push(num(r.complete_pct) || 0);
+      if (num(r.duration_min) != null) x.min.push(num(r.duration_min));
+    });
+    const median = (v) => { if (!v.length) return null; const s = [...v].sort((p, q) => p - q), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    const SHORT_MIN = 10;   // a full interview in under 10 minutes deserves a second look
+    // same house interviewed twice (possibly on different phones, which the form itself cannot see)
+    const houses = {};
+    R.forEach((r) => { if (!r.h_house_no || !r.h_moo) return; const k = `${r.h_moo}|${String(r.h_house_no).replace(/\s+/g, "")}`; (houses[k] = houses[k] || []).push(r); });
+    const dupHouses = Object.values(houses).filter((g) => g.length > 1);
     const dates = {};
     R.forEach((r) => (dates[r.iv_date] = (dates[r.iv_date] || 0) + 1));
     const animals = [["cattle", "โค/กระบือ"], ["poultry", "สัตว์ปีก"], ["dog", "สุนัข"], ["cat", "แมว"], ["pig", "สุกร"]];
@@ -330,8 +361,17 @@
       autoSection(R),
 
       section("คุณภาพการเก็บข้อมูล",
-        card("รายผู้สัมภาษณ์", null, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", { class: "n" }, "ครัวเรือน"), h("th", { class: "n" }, "ตอบครบเฉลี่ย"))),
-          h("tbody", null, Object.entries(ivs).sort((a, b) => b[1].length - a[1].length).map(([k, v]) => h("tr", null, h("td", null, k), h("td", { class: "n" }, v.length), h("td", { class: "n" }, `${(v.reduce((a, b) => a + b, 0) / v.length).toFixed(0)}%`)))))),
+        card("รายผู้สัมภาษณ์", `เวลาสัมภาษณ์นับจากคำตอบแรกถึงกดบันทึก · สั้นกว่า ${SHORT_MIN} นาทีควรตรวจสอบ`, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", { class: "n" }, "ครัวเรือน"), h("th", { class: "n" }, "ตอบครบเฉลี่ย"), h("th", { class: "n" }, "เวลา (มัธยฐาน)"), h("th", { class: "n" }, `< ${SHORT_MIN} นาที`))),
+          h("tbody", null, Object.entries(ivs).sort((a, b) => b[1].pct.length - a[1].pct.length).map(([k, v]) => {
+            const md = median(v.min), short = v.min.filter((m) => m < SHORT_MIN).length;
+            return h("tr", null, h("td", null, k), h("td", { class: "n" }, v.pct.length), h("td", { class: "n" }, `${(v.pct.reduce((a, b) => a + b, 0) / v.pct.length).toFixed(0)}%`),
+              h("td", { class: "n" }, md == null ? "–" : `${Math.round(md)} นาที`), h("td", { class: "n" + (short ? " flag" : "") }, v.min.length ? short : "–"));
+          })))),
+        card("บ้านที่ถูกสัมภาษณ์ซ้ำ", "หมู่และบ้านเลขที่เดียวกันมากกว่า 1 แถว — ควรเก็บแถวที่ครบกว่าแล้วลบอีกแถวใน Sheet",
+          dupHouses.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "หมู่ / บ้านเลขที่"), h("th", { class: "n" }, "แถว"), h("th", null, "ผู้สัมภาษณ์ · วันที่"))),
+            h("tbody", null, dupHouses.map((g) => h("tr", null, h("td", null, `หมู่ ${g[0].h_moo} · ${g[0].h_house_no}`), h("td", { class: "n flag" }, g.length),
+              h("td", null, g.map((r) => `${[r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ"} · ${r.iv_date || ""}`).join(" / "))))))
+            : h("p", { class: "empty-c" }, "ไม่พบบ้านซ้ำ")),
         card("รายวันที่สัมภาษณ์", null, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "วันที่"), h("th", { class: "n" }, "ครัวเรือน"))),
           h("tbody", null, Object.entries(dates).sort().map(([k, v]) => h("tr", null, h("td", null, k), h("td", { class: "n" }, v))))))));
   }
@@ -344,7 +384,8 @@
     mount(app,
       h("header", { class: "top" },
         h("a", { class: "brand", href: "index.html" }, h("span", { class: "mark" }, "44"), h("span", null, h("b", null, "สรุปผลแบบสัมภาษณ์ชุมชน"), h("small", null, "อัปเดตทุกครั้งที่เปิดหน้า"))),
-        h("div", { class: "top-r" }, h("button", { class: "btn ghost", type: "button", onclick: start }, "โหลดใหม่"), h("a", { class: "btn ghost", href: "index.html" }, "แบบฟอร์ม"))),
+        h("div", { class: "top-r" }, h("button", { class: "btn ghost", type: "button", onclick: start }, "โหลดใหม่"), h("a", { class: "btn ghost", href: "index.html" }, "แบบฟอร์ม"),
+          h("button", { class: "btn ghost", type: "button", title: "ลบรหัสดูผลออกจากเครื่องนี้", onclick: () => { forgetRead(); settings.read = ""; ALL = []; setup("ออกจากระบบแล้ว"); } }, "ออก"))),
       h("main", { class: "dwrap" },
         h("div", { class: "filters" },
           sel("moo", [["", "ทุกหมู่"], ...moos.map((m) => [m, `หมู่ ${m}`])], "หมู่ที่"),
@@ -378,7 +419,7 @@
       r: ["R (.R)", (ds) => [`${base}_r.R`, M69A.rScript(ds, `${base}.csv`), "text/plain;charset=utf-8", false]],
     };
     const run = async (keys) => {
-      const ds = await M69A.build(real, S, { deid: exportDeid, salt: settings.team || sessionSalt });
+      const ds = await M69A.build(real, S, { deid: exportDeid, salt: settings.read || sessionSalt });
       keys.forEach((k, i) => setTimeout(() => saveFile(...FILES[k][1](ds)), i * 400));
     };
     const pick = (deid, label, sub) => h("label", { class: "xopt" + (exportDeid === deid ? " on" : "") },
@@ -399,22 +440,32 @@
 
   function setup(msg) {
     const url = h("input", { type: "url", value: settings.api, placeholder: "https://script.google.com/macros/s/…/exec" });
-    const team = h("input", { type: "text", value: settings.team, placeholder: "รหัสทีม" });
+    const read = h("input", { type: "password", value: settings.read, placeholder: "รหัสดูผล (READ_CODE)", autocomplete: "off" });
+    const remember = h("input", { type: "checkbox" });
     const file = h("input", { type: "file", accept: ".csv,text/csv", onchange: async (e) => { const f = e.target.files[0]; if (!f) return; ALL = withDerived(parseCsv(await f.text())); source = `ไฟล์ ${f.name}`; render(); } });
     mount(app, h("main", { class: "wrap setup" },
       h("h1", null, "สรุปผลแบบสัมภาษณ์ชุมชน"),
       msg ? h("div", { class: "notice bad" }, msg) : null,
       h("label", { class: "field" }, "URL ของ Google Apps Script", url),
-      h("label", { class: "field" }, "รหัสทีม", team),
-      h("button", { class: "btn primary", type: "button", onclick: () => { settings = { api: url.value.trim(), team: team.value.trim() }; localStorage.setItem("m69.settings", JSON.stringify(settings)); start(); } }, "โหลดข้อมูลจาก Google Sheets"),
+      h("label", { class: "field" }, "รหัสดูผล", read, h("small", { class: "fine" }, "คนละรหัสกับรหัสทีมของนักศึกษา — ขอจากหัวหน้าทีม/ผู้ดูแล")),
+      h("label", { class: "chk", style: "margin:-4px 0 14px" }, remember, "จำรหัสไว้ในเครื่องนี้ (อย่าเลือกถ้าเป็นเครื่องส่วนกลาง)"),
+      h("button", {
+        class: "btn primary", type: "button",
+        onclick: () => {
+          settings = { api: url.value.trim(), read: read.value.trim() };
+          setRead(settings.read, remember.checked);
+          try { localStorage.setItem("m69.settings", JSON.stringify({ ...load("m69.settings", {}), api: settings.api })); } catch { /* private mode */ }
+          start();
+        },
+      }, "โหลดข้อมูลจาก Google Sheets"),
       h("p", { class: "fine" }, "หรือเปิดไฟล์ CSV ที่ดาวน์โหลดจาก Google Sheets (ไฟล์ → ดาวน์โหลด → .csv) / ไฟล์สำรองจากแบบฟอร์ม"), file));
   }
 
   async function start() {
-    if (!settings.api || !settings.team) return setup();
+    if (!settings.api || !settings.read) return setup();
     mount(app, h("main", { class: "wrap" }, h("p", null, "กำลังโหลดข้อมูล…")));
     try {
-      const [rows, pub] = await Promise.all([fetchRows(), M69.fetchPublished(settings.api, settings.team).catch(() => null)]);
+      const [rows, pub] = await Promise.all([fetchRows(), post({ action: "publishedForm" }).catch(() => null)]);
       if (pub && pub.form && !M69.validateForm(pub.form).length) { S = pub.form; indexForm(); }
       ALL = withDerived(rows); source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
     }

@@ -5,7 +5,7 @@
   const PREVIEW = M69.preview;
   const app = document.getElementById("app");
   // preview keeps its practice records apart from real interviews and never sends them
-  const LS = { records: PREVIEW ? "m69.preview.records" : "m69.records", settings: "m69.settings", remember: "m69.remember" };
+  const LS = { records: PREVIEW ? "m69.preview.records" : "m69.records", settings: "m69.settings", remember: "m69.remember", backup: "m69.lastBackup" };
   const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
   const BATCH = 20;
 
@@ -34,10 +34,10 @@
       else if (k === "checked") n.checked = !!v;
       else n.setAttribute(k, v === true ? "" : v);
     }
-    for (const kid of kids.flat()) if (kid != null && kid !== false) n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
     return n;
   }
-  const mount = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) => k != null && k !== false));
+  const mount = (node, ...kids) => node.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false));
 
   let toastTimer;
   function toast(msg, bad = false) {
@@ -74,7 +74,7 @@
   }
   function computeBmi(a) {
     const hgt = Number(a.q1_3), w = Number(a.q1_4);
-    if (!hgt || !w) return null;
+    if (!hgt || !w || hgt < 50 || hgt > 250) return null;   // height not in cm: no BMI rather than a wild number in the data
     return Math.round((w / ((hgt / 100) ** 2)) * 10) / 10;
   }
   const bmiClass = (b) => (b == null ? "" : b < 18.5 ? "น้ำหนักน้อย" : b < 23 ? "ปกติ" : b < 25 ? "ท้วม" : b < 30 ? "อ้วนระดับ 1" : "อ้วนระดับ 2");
@@ -95,6 +95,8 @@
     Object.assign(row, {
       uuid: rec.uuid, record_id: rec.record_id, form_version: S.version, created_at: rec.created_at,
       updated_at: rec.updated_at, submitted_at: nowIso(), complete_pct: progress(a),
+      started_at: rec.started_at || "", finished_at: rec.finished_at || "",
+      duration_min: rec.started_at && rec.finished_at ? Math.max(0, Math.round((Date.parse(rec.finished_at) - Date.parse(rec.started_at)) / 60000)) : "",
     });
     for (const q of allQuestions) {
       if (!visible(q, a)) continue;  // skipped by the form's own logic: stays blank
@@ -151,6 +153,7 @@
   }
   function touch(rec) {
     rec.updated_at = nowIso();
+    if (!rec.started_at) rec.started_at = rec.updated_at;   // first answer = interview starts
     rec.record_id = recordId(rec.answers);
     if (rec.status === "sent") rec.status = "ready";  // edited after sending: send again (upsert by uuid)
     saveRecords();
@@ -159,6 +162,59 @@
     const rem = {};
     allQuestions.filter((q) => q.remember).forEach((q) => { if (a[q.id]) rem[q.id] = a[q.id]; });
     store(LS.remember, rem);
+  }
+
+  // ------------------------------------------------------------ soft checks (never block saving: ask the interviewer to look again)
+  const qById = new Map(allQuestions.map((q) => [q.id, q]));
+  const sectionOf = (id) => S.sections.findIndex((s) => s.q.some((q) => q.id === id));
+  const filled = (v) => v != null && v !== "";
+  const houseKey = (a) => (filled(a.h_house_no) && filled(a.h_moo) ? `${a.h_moo}|${String(a.h_house_no).replace(/\s+/g, "")}` : "");
+  function duplicatesOf(rec) {
+    const k = houseKey(rec.answers);
+    return k ? Object.values(records).filter((r) => r.uuid !== rec.uuid && houseKey(r.answers) === k) : [];
+  }
+  function checks(rec) {
+    const a = rec.answers, out = [];
+    const add = (id, msg) => out.push({ id, msg });
+    const shown = (id) => qById.has(id) && visible(qById.get(id), a);
+    let metres = false;
+    if (shown("q1_3") && filled(a.q1_3) && a.q1_3 < 3) { add("q1_3", `ดูเหมือนกรอกเป็นเมตร — กรอกเป็นเซนติเมตร เช่น ${Math.round(a.q1_3 * 100) || 160}`); metres = true; }
+    for (const q of allQuestions) {
+      if (q.type !== "number" || (metres && q.id === "q1_3") || !visible(q, a) || !filled(a[q.id])) continue;
+      const v = a[q.id];
+      if ((q.min != null && v < q.min) || (q.max != null && v > q.max)) add(q.id, `ค่า ${v.toLocaleString("th-TH")} อยู่นอกช่วงปกติ (${q.min ?? "…"}–${q.max ?? "…"}${q.unit ? " " + q.unit : ""}) — ตรวจอีกครั้ง`);
+    }
+    if (shown("q1_2")) {
+      const y = Number(a.q1_2_year_be);
+      if (filled(a.q1_2_year_be) && y >= 1800 && y < 2300) add("q1_2", `ปีเกิด ${y} น่าจะเป็น ค.ศ. — ใช้ปี พ.ศ. (บวก 543 = ${y + 543})`);
+      else if (filled(a.q1_2_year_be) && computeAge(a) == null) add("q1_2", "ปีเกิดไม่ถูกต้อง — ตรวจอีกครั้ง");
+      if (filled(a.q1_2_age) && a.q1_2_age < 15) add("q1_2", `ผู้ให้ข้อมูลอายุ ${a.q1_2_age} ปี — ควรเป็นผู้ใหญ่ ตรวจวันเกิดอีกครั้ง`);
+      else if (filled(a.q1_2_age) && a.q1_2_age > 100) add("q1_2", `อายุ ${a.q1_2_age} ปี — ตรวจวันเกิดอีกครั้ง`);
+    }
+    const b = computeBmi(a);
+    if (shown("bmi") && b != null && !metres && (b < 15 || b > 45)) add("bmi", `BMI ${b} ผิดปกติ — ตรวจส่วนสูงและน้ำหนักอีกครั้ง`);
+    if (shown("q4_1_2") && filled(a.q4_1_2) && filled(a.q1_2_age) && a.q4_1_2 > a.q1_2_age) add("q4_1_2", `สูบมา ${a.q4_1_2} ปี มากกว่าอายุผู้ตอบ (${a.q1_2_age} ปี)`);
+    allQuestions.filter((q) => q.type === "animals" && visible(q, a)).forEach((q) => q.animals.forEach((x) => {
+      const k = `${q.id}_${x.key}`;
+      if (a[`${k}_has`] !== 2) return;
+      [["vacc", "รับวัคซีน"], ["deworm", "ถ่ายพยาธิ"]].forEach(([f, l]) => {
+        if (filled(a[`${k}_n`]) && filled(a[`${k}_${f}`]) && a[`${k}_${f}`] > a[`${k}_n`]) add(q.id, `${x.t}: จำนวนที่${l} (${a[`${k}_${f}`]}) มากกว่าจำนวนทั้งหมด (${a[`${k}_n`]})`);
+      });
+    }));
+    const dups = duplicatesOf(rec);
+    if (dups.length) add("h_house_no", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นบ้านเดียวกัน ให้แก้ชุดเดิมแทน`);
+    return out;
+  }
+  // fill the yellow note under each question on screen
+  function refreshChecks(rec) {
+    if (!rec) return;
+    const by = {};
+    checks(rec).forEach((c) => (by[c.id] = (by[c.id] || []).concat(c.msg)));
+    document.querySelectorAll(".qwarn").forEach((el) => {
+      const msgs = by[el.dataset.q] || [];
+      el.hidden = !msgs.length;
+      mount(el, msgs.map((m) => h("div", null, m)));
+    });
   }
 
   // ------------------------------------------------------------ sync
@@ -224,6 +280,7 @@
     const rows = Object.values(records).map(flatten);
     const lines = [COLUMNS.map((c) => c.key).join(",")].concat(rows.map((r) => COLUMNS.map((c) => csvCell(r[c.key])).join(",")));
     download(`survey_master69_backup_${todayIso()}.csv`, lines.join("\n"));
+    store(LS.backup, Date.now());
   }
   function exportCodebook() {
     const lines = ["column,question_no,label,codes"].concat(COLUMNS.map((c) => [c.key, c.q, c.label, c.codes].map(csvCell).join(",")));
@@ -279,9 +336,9 @@
         a[key] = v === "" ? null : Number(v);
         const bad = v !== "" && ((opts.min != null && Number(v) < opts.min) || (opts.max != null && Number(v) > opts.max));
         e.target.classList.toggle("warn", bad);
-        e.target.title = bad ? `ค่าปกติอยู่ระหว่าง ${opts.min}–${opts.max}` : "";
         if (opts.after) opts.after();
         touchDebounced();
+        refreshChecks(currentRec);
       },
     });
     return inp;
@@ -362,7 +419,7 @@
         break;
       }
     }
-    card.append(body);
+    card.append(body, h("div", { class: "qwarn", "data-q": q.id, hidden: true, role: "status" }));
     return card;
   }
 
@@ -370,15 +427,16 @@
     const el = document.getElementById("c-bmi");
     if (!el) return;
     const b = computeBmi(a);
-    el.textContent = b == null ? "กรอกส่วนสูงและน้ำหนักเพื่อคำนวณ" : `BMI ${b} กก./ม² · ${bmiClass(b)}`;
-    el.classList.toggle("warn", b != null && (b < 12 || b > 60));
+    const both = filled(a.q1_3) && filled(a.q1_4);
+    el.textContent = b != null ? `BMI ${b} กก./ม² · ${bmiClass(b)}` : both ? "คำนวณไม่ได้ — ตรวจส่วนสูง (ซม.) และน้ำหนัก (กก.)" : "กรอกส่วนสูงและน้ำหนักเพื่อคำนวณ";
+    el.classList.toggle("warn", (b != null && (b < 15 || b > 45)) || (b == null && both));
   }
 
   let touchTimer;
   let currentRec = null;
   function touchDebounced() {
     clearTimeout(touchTimer);
-    touchTimer = setTimeout(() => { if (currentRec) { touch(currentRec); updateHeaderInfo(currentRec); } }, 400);
+    touchTimer = setTimeout(() => { if (currentRec) { touch(currentRec); updateHeaderInfo(currentRec); refreshChecks(currentRec); } }, 400);
   }
 
   // ------------------------------------------------------------ views
@@ -403,29 +461,61 @@
     } catch (e) { if (!quiet) toast(`ตรวจหาแบบสอบถามใหม่ไม่ได้: ${e.message || e}`, true); }
   }
 
+  let homeFilter = { q: "", status: "" };
+  const fmtWhen = (t) => new Date(t).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   function viewHome() {
     currentRec = null;
     const list = Object.values(records).sort((p, r) => (r.updated_at || "").localeCompare(p.updated_at || ""));
-    const pending = list.filter((r) => r.status === "ready").length;
-    const drafts = list.filter((r) => r.status === "draft").length;
-    const sent = list.filter((r) => r.status === "sent").length;
+    const count = (st) => list.filter((r) => r.status === st).length;
+    const pending = count("ready"), drafts = count("draft"), sent = count("sent");
     const noSetup = !settings.api || !settings.team;
+    // nudges: unsent data getting old, no recent backup
+    const oldestReady = Math.min(...list.filter((r) => r.status === "ready").map((r) => Date.parse(r.updated_at) || Infinity));
+    const staleReady = Number.isFinite(oldestReady) && Date.now() - oldestReady > 12 * 3600e3;
+    const lastBackup = load(LS.backup, 0);
+    const needBackup = !PREVIEW && drafts + pending >= 3 && Date.now() - lastBackup > 24 * 3600e3;
+
+    const matches = (r) => {
+      if (homeFilter.status && r.status !== homeFilter.status) return false;
+      const words = homeFilter.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (!words.length) return true;
+      const a = r.answers;
+      const hay = `${a.h_house_no || ""} หมู่ ${a.h_moo || ""} ${a.h_village || ""} ${a.iv_first || ""} ${a.iv_last || ""} ${r.record_id || ""}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    };
+    const listBox = h("div", { class: "list" });
+    const fill = () => {
+      const shown = list.filter(matches);
+      mount(listBox, shown.length ? shown.map(recordRow)
+        : h("p", { class: "empty" }, list.length ? "ไม่พบแบบสัมภาษณ์ตามที่ค้นหา" : "ยังไม่มีแบบสัมภาษณ์ กด “สัมภาษณ์ครัวเรือนใหม่” เพื่อเริ่ม"));
+    };
+    fill();
+    const statBtn = (key, label, n) => h("button", {
+      type: "button", class: "stat" + (homeFilter.status === key ? " on" : ""), "aria-pressed": String(homeFilter.status === key), title: "กดเพื่อแสดงเฉพาะสถานะนี้",
+      onclick: () => { homeFilter.status = homeFilter.status === key ? "" : key; render({ keepScroll: true }); },
+    }, h("b", null, n), h("span", null, label));
+
     mount(app,
-      topbar(h("a", { class: "btn ghost", href: "#/settings" }, "ตั้งค่า")),
+      topbar([h("a", { class: "btn ghost", href: "#/help" }, "วิธีใช้"), h("a", { class: "btn ghost", href: "#/settings" }, "ตั้งค่า")]),
       h("main", { class: "wrap" },
         !PREVIEW && previewCount() ? h("div", { class: "notice" },
           `มีแบบสัมภาษณ์ ${previewCount()} ชุดที่กรอกไว้ในโหมดทดลอง (ยังไม่ถูกส่ง) `,
           h("button", { class: "btn tiny", type: "button", onclick: movePreview }, "ย้ายมาเป็นข้อมูลจริง")) : null,
-        noSetup ? h("div", { class: "notice" }, "ยังไม่ได้เชื่อมต่อ Google Sheets — สัมภาษณ์และบันทึกในเครื่องได้ตามปกติ แล้วตั้งค่าที่เมนู ", h("a", { href: "#/settings" }, "ตั้งค่า"), " ก่อนส่งข้อมูล") : null,
+        noSetup ? h("div", { class: "notice" }, "ยังไม่ได้เชื่อมต่อ Google Sheets — สัมภาษณ์และบันทึกในเครื่องได้ตามปกติ แล้วตั้งค่าที่เมนู ", h("a", { href: "#/settings" }, "ตั้งค่า"), " ก่อนส่งข้อมูล · ใช้ครั้งแรก อ่าน ", h("a", { href: "#/help" }, "วิธีใช้"), " ก่อน") : null,
+        staleReady && !noSetup ? h("div", { class: "notice" }, `มีข้อมูลรอส่งค้างตั้งแต่ ${fmtWhen(oldestReady)} — เมื่อมีสัญญาณให้กด “ส่งข้อมูลที่ค้าง”`) : null,
+        needBackup ? h("div", { class: "notice" }, `ยังไม่ได้ส่ง ${drafts + pending} ชุด และ${lastBackup ? `ดาวน์โหลดสำรองล่าสุดเมื่อ ${fmtWhen(lastBackup)}` : "ยังไม่เคยดาวน์โหลดสำรอง"} `,
+          h("button", { class: "btn tiny", type: "button", onclick: () => { exportCsv(); render({ keepScroll: true }); } }, "ดาวน์โหลดสำรองตอนนี้")) : null,
         h("div", { class: "hero" },
           h("button", { class: "btn primary big", type: "button", onclick: () => { const r = newRecord(); location.hash = `#/form/${r.uuid}/0`; } }, "+ สัมภาษณ์ครัวเรือนใหม่"),
           h("button", { class: "btn big", type: "button", disabled: syncing || !pending, onclick: () => syncPending() }, syncing ? "กำลังส่ง…" : `ส่งข้อมูลที่ค้าง (${pending})`)),
-        h("div", { class: "stats" },
-          [["ฉบับร่าง", drafts], ["รอส่ง", pending], ["ส่งแล้ว", sent]].map(([k, v]) => h("div", { class: "stat" }, h("b", null, v), h("span", null, k)))),
-        h("h2", null, "แบบสัมภาษณ์ในเครื่องนี้"),
-        list.length ? h("div", { class: "list" }, list.map(recordRow)) : h("p", { class: "empty" }, "ยังไม่มีแบบสัมภาษณ์ กด “สัมภาษณ์ครัวเรือนใหม่” เพื่อเริ่ม"),
+        h("div", { class: "stats" }, statBtn("draft", "ฉบับร่าง", drafts), statBtn("ready", "รอส่ง", pending), statBtn("sent", "ส่งแล้ว", sent)),
+        h("div", { class: "listhead" },
+          h("h2", null, homeFilter.status ? `แบบสัมภาษณ์: ${{ draft: "ฉบับร่าง", ready: "รอส่ง", sent: "ส่งแล้ว" }[homeFilter.status]}` : "แบบสัมภาษณ์ในเครื่องนี้"),
+          homeFilter.status ? h("button", { class: "btn tiny", type: "button", onclick: () => { homeFilter.status = ""; render({ keepScroll: true }); } }, "แสดงทั้งหมด") : null),
+        list.length > 3 ? h("input", { type: "search", class: "search", placeholder: "ค้นหา บ้านเลขที่ หมู่ ชื่อหมู่บ้าน หรือผู้สัมภาษณ์", value: homeFilter.q, "aria-label": "ค้นหาแบบสัมภาษณ์", oninput: (e) => { homeFilter.q = e.target.value; fill(); } }) : null,
+        listBox,
         h("div", { class: "foot-actions" },
-          h("button", { class: "btn ghost", type: "button", onclick: exportCsv, disabled: !list.length }, "ดาวน์โหลดสำรอง (CSV)"),
+          h("button", { class: "btn ghost", type: "button", onclick: () => { exportCsv(); render({ keepScroll: true }); }, disabled: !list.length }, "ดาวน์โหลดสำรอง (CSV)"),
           h("button", { class: "btn ghost", type: "button", onclick: exportCodebook }, "ดาวน์โหลด Codebook")),
         h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น"),
         h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ`)));
@@ -461,17 +551,19 @@
         h("b", null, `บ้านเลขที่ ${a.h_house_no || "–"} หมู่ ${a.h_moo || "–"}`, a.h_village ? ` บ้าน${a.h_village}` : ""),
         h("small", null, `${a.iv_date || ""} · ${[a.iv_first, a.iv_last].filter(Boolean).join(" ")} · ตอบแล้ว ${progress(a)}%`),
         r.error && r.status === "ready" ? h("small", { class: "err" }, `ส่งไม่สำเร็จ: ${r.error}`) : null),
+      duplicatesOf(r).length ? h("span", { class: "chip dup", title: "มีบ้านเลขที่และหมู่เดียวกันในเครื่องนี้มากกว่า 1 ชุด" }, "บ้านซ้ำ?") : null,
       h("span", { class: `chip ${st[1]}` }, st[0]),
       r.status !== "sent" ? del : null);
   }
 
   function updateHeaderInfo(rec) {
     const el = document.getElementById("rec-info");
-    if (el) el.textContent = `บ้านเลขที่ ${rec.answers.h_house_no || "–"} หมู่ ${rec.answers.h_moo || "–"} · ตอบแล้ว ${progress(rec.answers)}% · บันทึกอัตโนมัติ`;
+    const t = rec.updated_at ? new Date(rec.updated_at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }) : "";
+    if (el) el.textContent = `บ้านเลขที่ ${rec.answers.h_house_no || "–"} หมู่ ${rec.answers.h_moo || "–"} · ตอบแล้ว ${progress(rec.answers)}% · ✓ บันทึกในเครื่องแล้ว${t ? ` ${t} น.` : ""}`;
   }
 
   let secIndex = 0;
-  function viewForm(id, idx) {
+  function viewForm(id, idx, focusQ) {
     const rec = records[id];
     if (!rec) { location.hash = "#/"; return; }
     currentRec = rec;
@@ -485,6 +577,10 @@
           h("div", { id: "section" }))));
     renderSection(rec);
     updateNet();
+    if (focusQ) setTimeout(() => {
+      const el = document.getElementById(`q-${focusQ}`);
+      if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); }
+    }, 50);
   }
 
   function renderNav(rec) {
@@ -521,12 +617,14 @@
         secIndex > 0 ? h("a", { class: "btn", href: `#/form/${rec.uuid}/${secIndex - 1}` }, "← ก่อนหน้า") : h("span"),
         h("a", { class: "btn primary", href: `#/form/${rec.uuid}/${secIndex + 1}` }, secIndex === S.sections.length - 1 ? "ตรวจทาน →" : "ถัดไป →")));
     updateComputed(a);
+    refreshChecks(rec);
     if (keepScroll) window.scrollTo(0, y); else window.scrollTo(0, 0);
   }
 
   function reviewPanel(rec) {
     const a = rec.answers;
     const missing = requiredMissing(a);
+    const warns = checks(rec);
     const perSection = S.sections.map((s, i) => {
       const qs = s.q.filter((q) => q.type !== "computed" && visible(q, a));
       const left = qs.filter((q) => !isAnswered(q, a));
@@ -535,6 +633,7 @@
     const finish = (send) => {
       if (missing.length) { toast("กรอกข้อที่จำเป็น (*) ให้ครบก่อน", true); return; }
       rememberInterviewer(a);
+      if (!rec.finished_at) rec.finished_at = nowIso();
       rec.status = "ready"; touch(rec);
       if (send) syncPending().then(() => (location.hash = "#/"));
       else { toast("บันทึกแล้ว รอส่งเมื่อมีสัญญาณ"); location.hash = "#/"; }
@@ -542,9 +641,12 @@
     return h("div", null,
       h("h1", null, "ตรวจทานและส่ง"),
       h("p", null, `ตอบแล้ว ${progress(a)}% ของข้อที่ต้องถาม`),
-      missing.length ? h("div", { class: "notice bad" }, "ยังไม่ได้กรอกข้อจำเป็น: ", missing.map((q, i) => [i ? ", " : "", h("a", { href: `#/form/${rec.uuid}/${S.sections.findIndex((s) => s.id === q.section)}` }, q.t)])) : null,
+      missing.length ? h("div", { class: "notice bad" }, "ยังไม่ได้กรอกข้อจำเป็น: ", missing.map((q, i) => [i ? ", " : "", h("a", { href: `#/form/${rec.uuid}/${S.sections.findIndex((s) => s.id === q.section)}?q=${q.id}` }, q.t)])) : null,
+      warns.length ? h("div", { class: "review" }, h("h3", null, `ค่าที่ควรตรวจอีกครั้ง (${warns.length}) — ส่งได้ แต่ควรดูก่อน`),
+        warns.map((c) => { const q = qById.get(c.id); return h("div", { class: "rv warn" }, h("a", { href: `#/form/${rec.uuid}/${sectionOf(c.id)}?q=${c.id}` }, q ? `${q.no ? q.no + " " : ""}${q.t}` : c.id), h("small", null, c.msg)); })) : null,
       perSection.length ? h("div", { class: "review" }, h("h3", null, "ข้อที่ยังไม่ได้ตอบ (ส่งได้ แต่ควรตรวจทาน)"),
-        perSection.map(({ s, i, left }) => h("div", { class: "rv" }, h("a", { href: `#/form/${rec.uuid}/${i}` }, s.title), h("small", null, left.map((q) => q.no || q.t).join(" · ")))))
+        perSection.map(({ s, i, left }) => h("div", { class: "rv" }, h("a", { href: `#/form/${rec.uuid}/${i}` }, s.title),
+          h("div", { class: "qlinks" }, left.map((q) => h("a", { href: `#/form/${rec.uuid}/${i}?q=${q.id}`, title: q.t }, q.no || (q.t.length > 24 ? q.t.slice(0, 23) + "…" : q.t)))))))
         : h("div", { class: "notice good" }, "ตอบครบทุกข้อแล้ว"),
       h("div", { class: "pager" },
         h("button", { class: "btn", type: "button", onclick: () => finish(false) }, "บันทึก (ส่งทีหลัง)"),
@@ -577,9 +679,62 @@
         h("h2", null, "แบบสอบถาม"),
         h("p", null, `ใช้เวอร์ชัน ${S.version} (${{ published: "ที่ผู้ดูแลเผยแพร่", default: "ฉบับตั้งต้นในเว็บ", draft: "ฉบับร่างทดลอง" }[M69.source]})`),
         h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: () => checkFormUpdate({ quiet: false }) }, "ตรวจหาแบบสอบถามใหม่"), h("a", { class: "btn ghost", href: "admin.html" }, "ผู้ดูแล: แก้ไขแบบสอบถาม")),
+        h("h2", null, "ความปลอดภัยของข้อมูลในเครื่องนี้"),
+        deviceStatus(),
+        h("p", null, h("a", { href: "#/help" }, "อ่านวิธีใช้และข้อควรระวัง")),
         h("p", { class: "fine" }, "หัวหน้าทีมส่งลิงก์ที่มี URL ให้ได้ เช่น …/index.html#/settings?api=<URL> ส่วนรหัสทีมให้บอกกันโดยตรง ไม่ใส่ในลิงก์")));
     const p = new URLSearchParams((location.hash.split("?")[1] || ""));
     if (p.get("api")) { url.value = p.get("api"); }
+    updateNet();
+  }
+
+  function deviceStatus() {
+    const standalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+    const row = (ok, good, bad) => h("li", { class: ok ? "ok" : ok === false ? "no" : "" }, ok ? good : bad);
+    return h("ul", { class: "status-list" },
+      row(persisted, "เบราว์เซอร์จะไม่ลบข้อมูลในเครื่องนี้เอง", persisted === false ? "เบราว์เซอร์อาจลบข้อมูลเมื่อพื้นที่เต็ม — เพิ่มแอปไว้หน้าจอโฮม และส่งข้อมูลทุกวัน" : "กำลังตรวจสอบการป้องกันข้อมูล…"),
+      row(!!standalone, "เปิดจากไอคอนบนหน้าจอโฮมแล้ว", "ยังไม่ได้เพิ่มไว้หน้าจอโฮม (แนะนำ ดูวิธีในหน้าวิธีใช้)"),
+      row(!!(settings.api && settings.team), "ตั้งค่าการส่งข้อมูลแล้ว", "ยังไม่ได้ตั้งค่าการส่งข้อมูล"),
+      row(navigator.onLine, "ออนไลน์อยู่", "ออฟไลน์ — กรอกต่อได้ ข้อมูลจะส่งเมื่อมีสัญญาณ"));
+  }
+
+  function viewHelp() {
+    currentRec = null;
+    const step = (title, ...items) => h("section", { class: "help-card" }, h("h2", null, title), h("ol", null, items.map((x) => h("li", null, x))));
+    mount(app,
+      topbar(h("a", { class: "btn ghost", href: "#/" }, "← รายการ")),
+      h("main", { class: "wrap narrow help" },
+        h("h1", null, "วิธีใช้แบบสัมภาษณ์"),
+        h("p", { class: "lead" }, "แอปนี้ใช้ได้แม้ไม่มีสัญญาณ ทุกคำตอบบันทึกในเครื่องทันที แล้วส่งเข้า Google Sheets เมื่อมีอินเทอร์เน็ต"),
+        deviceStatus(),
+        step("1. ก่อนลงพื้นที่ (ทำครั้งเดียว)",
+          ["เมนู ", h("a", { href: "#/settings" }, "ตั้งค่า"), " → ใส่ URL และรหัสทีมที่หัวหน้าทีมให้ → กด “ทดสอบการเชื่อมต่อ”"],
+          "เพิ่มแอปไว้หน้าจอโฮม — iPhone: Safari → ปุ่มแชร์ → “เพิ่มไปยังหน้าจอโฮม” · Android: Chrome → ⋮ → “เพิ่มลงในหน้าจอหลัก/ติดตั้งแอป”",
+          "เปิดแอปจากไอคอนนั้นหนึ่งครั้งตอนมีเน็ต เพื่อให้ใช้แบบออฟไลน์ได้",
+          "ลองกรอกแบบทดสอบ 1 ชุดแล้วส่ง เพื่อเช็กว่าทุกอย่างทำงาน (แล้วแจ้งหัวหน้าทีมให้ลบแถวทดสอบ)"),
+        step("2. ระหว่างสัมภาษณ์",
+          "กด “+ สัมภาษณ์ครัวเรือนใหม่” · ขอความยินยอมและอ่านคำชี้แจงในส่วนแรกให้ผู้ตอบฟังก่อน",
+          "ข้อที่ไม่เกี่ยวกับผู้ตอบจะหายไปเอง · อายุและ BMI คำนวณให้",
+          "ข้อความสีเหลืองใต้ข้อ = ค่าที่ควรตรวจอีกครั้ง (ไม่บังคับ บันทึกได้)",
+          "ปิดแอปกลางคันได้ คำตอบไม่หาย กลับมาเปิดจากรายการแล้วกรอกต่อ"),
+        step("3. หลังสัมภาษณ์",
+          "ไปหน้า “ตรวจทานและส่ง” → ดูข้อที่ยังไม่ตอบ/ค่าที่ควรตรวจ → กดบันทึก",
+          "ทุกเย็นเมื่อมีสัญญาณ กด “ส่งข้อมูลที่ค้าง” ให้เหลือ 0",
+          "กด “ดาวน์โหลดสำรอง (CSV)” ทุกวัน ถ้าส่งไม่ได้ให้ส่งไฟล์นี้ให้หัวหน้าทีม",
+          "แก้คำตอบหลังส่งได้ ระบบจะส่งไปแก้แถวเดิม ไม่เกิดข้อมูลซ้ำ"),
+        h("section", { class: "help-card dont" }, h("h2", null, "ห้ามทำ จนกว่าจะส่งข้อมูลครบ"),
+          h("ul", null,
+            h("li", null, "ล้างประวัติ / ล้างข้อมูลเว็บไซต์ของเบราว์เซอร์"),
+            h("li", null, "ใช้โหมดไม่ระบุตัวตน (Incognito / Private)"),
+            h("li", null, "สลับไปใช้เครื่องหรือเบราว์เซอร์อื่น — ข้อมูลไม่ย้ายตาม"),
+            h("li", null, "ถ่ายภาพหน้าจอที่มีข้อมูลผู้ตอบลงโซเชียล หรือบอกรหัสทีมในกลุ่มสาธารณะ"))),
+        h("section", { class: "help-card" }, h("h2", null, "ปัญหาที่พบบ่อย"),
+          h("dl", null,
+            h("dt", null, "ส่งไม่ได้: “รหัสทีมไม่ถูกต้อง”"), h("dd", null, "ตรวจรหัสทีมในหน้าตั้งค่า (ตัวพิมพ์ เว้นวรรค) แล้วกดทดสอบอีกครั้ง"),
+            h("dt", null, "ส่งไม่ได้: “ตอบกลับไม่ใช่ JSON”"), h("dd", null, "URL ต้องเป็นของ Apps Script และลงท้ายด้วย /exec — คัดลอกจากหัวหน้าทีมใหม่"),
+            h("dt", null, "ขึ้น “บ้านซ้ำ?” ในรายการ"), h("dd", null, "มีบ้านเลขที่และหมู่เดียวกัน 2 ชุด ถ้าเป็นบ้านเดียวกันให้เก็บชุดที่ครบกว่า แล้วลบอีกชุด (ลบได้เฉพาะชุดที่ยังไม่ส่ง)"),
+            h("dt", null, "มีแถบ “แบบสอบถามเวอร์ชันใหม่”"), h("dd", null, "กลับหน้ารายการแล้วกด “โหลดใหม่” คำตอบที่กรอกไว้ไม่หาย"))),
+        h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version}`)));
     updateNet();
   }
 
@@ -755,7 +910,9 @@
           else if (q.type === "text" && !a[q.id]) a[q.id] = q.id === "q3_4_1" ? `${1 + Math.floor(R() * 15)} ปี` : q.id === "q3_3_relation" ? ["พ่อ", "แม่", "พี่น้อง", "พ่อและแม่"][Math.floor(R() * 4)] : "";
         }
       }
-      const rec = { uuid: uuid(), created_at: nowIso(), updated_at: nowIso(), status: "ready", answers: a };
+      const t0 = Date.now() - R() * 3 * 86400e3;
+      const rec = { uuid: uuid(), created_at: nowIso(), updated_at: nowIso(), status: "ready", answers: a,
+        started_at: new Date(t0).toISOString(), finished_at: new Date(t0 + clamp(norm(35, 12), 6, 90) * 60000).toISOString() };
       rec.record_id = "MOCK-" + recordId(a);
       recs.push(rec);
     }
@@ -778,16 +935,26 @@
   // ------------------------------------------------------------ router
   function render({ keepScroll = false } = {}) {
     const hash = location.hash.replace(/^#/, "") || "/";
-    const [path] = hash.split("?");
+    const [path, query] = hash.split("?");
     const parts = path.split("/").filter(Boolean);
     const y = window.scrollY;
-    if (parts[0] === "form") viewForm(parts[1], Number(parts[2] || 0));
+    if (parts[0] === "form") viewForm(parts[1], Number(parts[2] || 0), new URLSearchParams(query || "").get("q"));
     else if (parts[0] === "settings") viewSettings();
+    else if (parts[0] === "help") viewHelp();
     else viewHome();
     if (keepScroll) window.scrollTo(0, y);
   }
   window.addEventListener("hashchange", () => render());
   window.addEventListener("storage", (e) => { if (e.key === LS.records) { records = load(LS.records, {}); if (!currentRec) render({ keepScroll: true }); } });
+
+  // without this, mobile browsers may clear site data when the phone runs low on space
+  let persisted = null;
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persisted().then((p) => p || navigator.storage.persist()).then((ok) => {
+      persisted = ok;
+      if (/^#\/(help|settings)/.test(location.hash)) render({ keepScroll: true });   // these pages show the result
+    }).catch(() => {});
+  }
 
   if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
