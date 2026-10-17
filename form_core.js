@@ -4,10 +4,19 @@
 //  - the column layout sent to Google Sheets, and form validation
 (() => {
   "use strict";
-  const KEY = { published: "m69.form", draft: "m69.adminDraft" };
+  const KEY = { published: "m69.form", draft: "m69.adminDraft", display: "m69.display" };
   const load = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
   const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
   const preview = new URLSearchParams(location.search).get("preview") === "1";
+
+  // display preferences (theme, text size) are per device and shared by all pages
+  function applyDisplay(d = load(KEY.display) || {}) {
+    const r = document.documentElement;
+    if (d.theme === "light" || d.theme === "dark") r.dataset.theme = d.theme; else delete r.dataset.theme;
+    if (d.size === "l" || d.size === "xl") r.dataset.size = d.size; else delete r.dataset.size;
+  }
+  applyDisplay();
+  const setDisplay = (patch) => { const d = { ...(load(KEY.display) || {}), ...patch }; store(KEY.display, d); applyDisplay(d); return d; };
 
   // ---------------------------------------------------------------- skip rules
   // leaf: { q, op, v }   ops: eq | neq (answered and different) | in | has | nothas (multi answered, does not include) | answered | gte | lte
@@ -176,5 +185,5 @@
     return got.form.version !== window.SURVEY.version ? got.form.version : null;
   }
 
-  window.M69 = { OPS, evalRule, ruleRefs, columnSpec, questions, validateForm, fetchPublished, refresh, source: chosen.source, preview, KEY };
+  window.M69 = { setDisplay, getDisplay: () => load(KEY.display) || {}, OPS, evalRule, ruleRefs, columnSpec, questions, validateForm, fetchPublished, refresh, source: chosen.source, preview, KEY };
 })();

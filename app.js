@@ -436,7 +436,7 @@
   let currentRec = null;
   function touchDebounced() {
     clearTimeout(touchTimer);
-    touchTimer = setTimeout(() => { if (currentRec) { touch(currentRec); updateHeaderInfo(currentRec); refreshChecks(currentRec); } }, 400);
+    touchTimer = setTimeout(() => { if (currentRec) { touch(currentRec); updateHeaderInfo(currentRec); refreshChecks(currentRec); renderNav(currentRec); } }, 400);
   }
 
   // ------------------------------------------------------------ views
@@ -462,6 +462,18 @@
   }
 
   let homeFilter = { q: "", status: "" };
+  const isStandalone = () => !!((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone);
+  function onboarding() {
+    const step = (done, title, sub, href, cta) => h("li", { class: done ? "done" : "" },
+      h("span", { class: "dot" }, done ? "✓" : ""), h("span", null, h("b", null, title), h("small", null, sub)),
+      done ? null : h("a", { class: "btn tiny", href }, cta));
+    return h("section", { class: "onboard" },
+      h("h2", null, "เริ่มต้นใช้งาน"),
+      h("ol", null,
+        step(settings.api && settings.team, "ตั้งค่าการส่งข้อมูล", "ใส่ URL และรหัสทีมที่หัวหน้าทีมให้", "#/settings", "ตั้งค่า"),
+        step(isStandalone(), "เพิ่มไว้หน้าจอโฮม", "เปิดได้แม้ไม่มีสัญญาณ เหมือนแอป", "#/help", "ดูวิธี"),
+        step(false, "อ่านวิธีใช้ 1 นาที", "สิ่งที่ต้องทำทุกวัน และสิ่งที่ห้ามทำ", "#/help", "อ่าน")));
+  }
   const fmtWhen = (t) => new Date(t).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   function viewHome() {
     currentRec = null;
@@ -501,7 +513,7 @@
         !PREVIEW && previewCount() ? h("div", { class: "notice" },
           `มีแบบสัมภาษณ์ ${previewCount()} ชุดที่กรอกไว้ในโหมดทดลอง (ยังไม่ถูกส่ง) `,
           h("button", { class: "btn tiny", type: "button", onclick: movePreview }, "ย้ายมาเป็นข้อมูลจริง")) : null,
-        noSetup ? h("div", { class: "notice" }, "ยังไม่ได้เชื่อมต่อ Google Sheets — สัมภาษณ์และบันทึกในเครื่องได้ตามปกติ แล้วตั้งค่าที่เมนู ", h("a", { href: "#/settings" }, "ตั้งค่า"), " ก่อนส่งข้อมูล · ใช้ครั้งแรก อ่าน ", h("a", { href: "#/help" }, "วิธีใช้"), " ก่อน") : null,
+        !list.length && !PREVIEW ? onboarding() : noSetup ? h("div", { class: "notice" }, "ยังไม่ได้เชื่อมต่อ Google Sheets — สัมภาษณ์และบันทึกในเครื่องได้ตามปกติ แล้วตั้งค่าที่เมนู ", h("a", { href: "#/settings" }, "ตั้งค่า"), " ก่อนส่งข้อมูล · ใช้ครั้งแรก อ่าน ", h("a", { href: "#/help" }, "วิธีใช้"), " ก่อน") : null,
         staleReady && !noSetup ? h("div", { class: "notice" }, `มีข้อมูลรอส่งค้างตั้งแต่ ${fmtWhen(oldestReady)} — เมื่อมีสัญญาณให้กด “ส่งข้อมูลที่ค้าง”`) : null,
         needBackup ? h("div", { class: "notice" }, `ยังไม่ได้ส่ง ${drafts + pending} ชุด และ${lastBackup ? `ดาวน์โหลดสำรองล่าสุดเมื่อ ${fmtWhen(lastBackup)}` : "ยังไม่เคยดาวน์โหลดสำรอง"} `,
           h("button", { class: "btn tiny", type: "button", onclick: () => { exportCsv(); render({ keepScroll: true }); } }, "ดาวน์โหลดสำรองตอนนี้")) : null,
@@ -550,6 +562,7 @@
       h("a", { class: "rec-main", href: `#/form/${r.uuid}/0` },
         h("b", null, `บ้านเลขที่ ${a.h_house_no || "–"} หมู่ ${a.h_moo || "–"}`, a.h_village ? ` บ้าน${a.h_village}` : ""),
         h("small", null, `${a.iv_date || ""} · ${[a.iv_first, a.iv_last].filter(Boolean).join(" ")} · ตอบแล้ว ${progress(a)}%`),
+        h("span", { class: "pbar thin" }, h("i", { style: `width:${progress(a)}%` })),
         r.error && r.status === "ready" ? h("small", { class: "err" }, `ส่งไม่สำเร็จ: ${r.error}`) : null),
       duplicatesOf(r).length ? h("span", { class: "chip dup", title: "มีบ้านเลขที่และหมู่เดียวกันในเครื่องนี้มากกว่า 1 ชุด" }, "บ้านซ้ำ?") : null,
       h("span", { class: `chip ${st[1]}` }, st[0]),
@@ -559,10 +572,42 @@
   function updateHeaderInfo(rec) {
     const el = document.getElementById("rec-info");
     const t = rec.updated_at ? new Date(rec.updated_at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }) : "";
-    if (el) el.textContent = `บ้านเลขที่ ${rec.answers.h_house_no || "–"} หมู่ ${rec.answers.h_moo || "–"} · ตอบแล้ว ${progress(rec.answers)}% · ✓ บันทึกในเครื่องแล้ว${t ? ` ${t} น.` : ""}`;
+    const pct = progress(rec.answers);
+    if (el) mount(el,
+      h("span", null, `บ้านเลขที่ ${rec.answers.h_house_no || "–"} หมู่ ${rec.answers.h_moo || "–"} · ตอบแล้ว ${pct}%`),
+      h("span", { class: "saved" }, `✓ บันทึกในเครื่องแล้ว${t ? ` ${t} น.` : ""}`),
+      h("span", { class: "pbar", role: "progressbar", "aria-valuenow": pct, "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": "ความคืบหน้าทั้งแบบสอบถาม" }, h("i", { style: `width:${pct}%` })));
+    renderFormbar(rec);
   }
 
   let secIndex = 0;
+  // bottom bar while interviewing: prev / where am I (tap = next unanswered question) / next
+  const sectionCounts = (s, a) => { const qs = s.q.filter((q) => q.type !== "computed" && visible(q, a)); return { qs, done: qs.filter((q) => isAnswered(q, a)).length }; };
+  function renderFormbar(rec) {
+    const bar = document.getElementById("formbar");
+    if (!bar) return;
+    const n = S.sections.length, review = secIndex === n;
+    const go = (i) => `#/form/${rec.uuid}/${i}`;
+    let mid;
+    if (review) mid = h("span", { class: "fb-mid" }, h("b", null, "ตรวจทานและส่ง"), h("small", null, `ตอบแล้ว ${progress(rec.answers)}% ของทั้งชุด`));
+    else {
+      const { qs, done } = sectionCounts(S.sections[secIndex], rec.answers);
+      mid = h("button", {
+        type: "button", class: "fb-mid", title: "ไปข้อถัดไปที่ยังไม่ตอบ",
+        onclick: () => {
+          const next = qs.find((q) => !isAnswered(q, rec.answers));
+          const el = next && document.getElementById(`q-${next.id}`);
+          if (!el) { toast(secIndex < n - 1 ? "ส่วนนี้ตอบครบแล้ว — กด ถัดไป" : "ตอบครบแล้ว — กด ตรวจทาน"); return; }
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+        },
+      }, h("b", null, S.sections[secIndex].short || S.sections[secIndex].title), h("small", null, done === qs.length ? "ตอบครบส่วนนี้แล้ว ✓" : `ตอบแล้ว ${done}/${qs.length} · แตะเพื่อไปข้อที่ยังไม่ตอบ`));
+    }
+    mount(bar,
+      secIndex > 0 ? h("a", { class: "btn", href: go(secIndex - 1) }, "‹ ก่อนหน้า") : h("a", { class: "btn", href: "#/" }, "‹ รายการ"),
+      mid,
+      review ? h("span", { class: "fb-space" }) : h("a", { class: "btn primary", href: go(secIndex + 1) }, secIndex === n - 1 ? "ตรวจทาน ›" : "ถัดไป ›"));
+  }
   function viewForm(id, idx, focusQ) {
     const rec = records[id];
     if (!rec) { location.hash = "#/"; return; }
@@ -574,7 +619,8 @@
         h("nav", { class: "secnav", id: "secnav" }),
         h("main", { class: "form-main" },
           h("div", { class: "rec-info", id: "rec-info" }),
-          h("div", { id: "section" }))));
+          h("div", { id: "section" }))),
+      h("nav", { class: "formbar", id: "formbar", "aria-label": "เลื่อนส่วน" }));
     renderSection(rec);
     updateNet();
     if (focusQ) setTimeout(() => {
@@ -591,7 +637,7 @@
       const qs = s.q.filter((q) => q.type !== "computed" && visible(q, a));
       const done = qs.filter((q) => isAnswered(q, a)).length;
       return h("a", { class: "sec" + (i === secIndex ? " cur" : "") + (qs.length && done === qs.length ? " full" : ""), href: `#/form/${rec.uuid}/${i}` },
-        h("span", { class: "n" }, i === 0 ? "•" : i), h("span", { class: "t" }, s.short), h("span", { class: "c" }, `${done}/${qs.length}`));
+        h("span", { class: "n" }, qs.length && done === qs.length ? "✓" : i === 0 ? "•" : i), h("span", { class: "t" }, s.short), h("span", { class: "c" }, `${done}/${qs.length}`));
     }), h("a", { class: "sec review" + (secIndex === S.sections.length ? " cur" : ""), href: `#/form/${rec.uuid}/${S.sections.length}` }, h("span", { class: "n" }, "✓"), h("span", { class: "t" }, "ตรวจทานและส่ง")));
     const cur = nav.querySelector(".cur");
     if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "center" });
@@ -613,9 +659,7 @@
       s.note ? h("p", { class: "snote" }, s.note) : null,
       qs.map((q) => question(q, a, rec)),
       hidden ? h("p", { class: "fine" }, `ข้ามให้อัตโนมัติ ${hidden} ข้อ ตามคำตอบก่อนหน้า`) : null,
-      h("div", { class: "pager" },
-        secIndex > 0 ? h("a", { class: "btn", href: `#/form/${rec.uuid}/${secIndex - 1}` }, "← ก่อนหน้า") : h("span"),
-        h("a", { class: "btn primary", href: `#/form/${rec.uuid}/${secIndex + 1}` }, secIndex === S.sections.length - 1 ? "ตรวจทาน →" : "ถัดไป →")));
+      h("a", { class: "btn primary big endnext", href: `#/form/${rec.uuid}/${secIndex + 1}` }, secIndex === S.sections.length - 1 ? "ไปหน้าตรวจทาน ›" : `ถัดไป: ${S.sections[secIndex + 1].short || S.sections[secIndex + 1].title} ›`));
     updateComputed(a);
     refreshChecks(rec);
     if (keepScroll) window.scrollTo(0, y); else window.scrollTo(0, 0);
@@ -678,18 +722,33 @@
         result,
         h("h2", null, "แบบสอบถาม"),
         h("p", null, `ใช้เวอร์ชัน ${S.version} (${{ published: "ที่ผู้ดูแลเผยแพร่", default: "ฉบับตั้งต้นในเว็บ", draft: "ฉบับร่างทดลอง" }[M69.source]})`),
-        h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: () => checkFormUpdate({ quiet: false }) }, "ตรวจหาแบบสอบถามใหม่"), h("a", { class: "btn ghost", href: "admin.html" }, "ผู้ดูแล: แก้ไขแบบสอบถาม")),
+        h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: () => checkFormUpdate({ quiet: false }) }, "ตรวจหาแบบสอบถามใหม่")),
+        h("h2", null, "การแสดงผล"),
+        displayControls(),
         h("h2", null, "ความปลอดภัยของข้อมูลในเครื่องนี้"),
         deviceStatus(),
         h("p", null, h("a", { href: "#/help" }, "อ่านวิธีใช้และข้อควรระวัง")),
+        h("p", { class: "fine" }, h("a", { href: "admin.html" }, "ผู้ดูแล: แก้ไขแบบสอบถาม"), " · ", h("a", { href: "dashboard.html" }, "หัวหน้าทีม: หน้าวิเคราะห์")),
         h("p", { class: "fine" }, "หัวหน้าทีมส่งลิงก์ที่มี URL ให้ได้ เช่น …/index.html#/settings?api=<URL> ส่วนรหัสทีมให้บอกกันโดยตรง ไม่ใส่ในลิงก์")));
     const p = new URLSearchParams((location.hash.split("?")[1] || ""));
     if (p.get("api")) { url.value = p.get("api"); }
     updateNet();
   }
 
+  function displayControls() {
+    const d = M69.getDisplay();
+    const seg = (key, label, opts) => h("div", { class: "field" }, label, h("div", { class: "seg", role: "radiogroup", "aria-label": label },
+      opts.map(([v, l]) => h("button", {
+        type: "button", role: "radio", "aria-checked": String((d[key] || "") === v), class: (d[key] || "") === v ? "on" : "",
+        onclick: () => { M69.setDisplay({ [key]: v }); render({ keepScroll: true }); },
+      }, l))));
+    return h("div", null,
+      seg("theme", "ธีม (กลางแจ้งแดดจ้า แนะนำแบบสว่าง)", [["", "ตามเครื่อง"], ["light", "สว่าง"], ["dark", "มืด"]]),
+      seg("size", "ขนาดตัวอักษร", [["", "ปกติ"], ["l", "ใหญ่"], ["xl", "ใหญ่มาก"]]));
+  }
+
   function deviceStatus() {
-    const standalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+    const standalone = isStandalone();
     const row = (ok, good, bad) => h("li", { class: ok ? "ok" : ok === false ? "no" : "" }, ok ? good : bad);
     return h("ul", { class: "status-list" },
       row(persisted, "เบราว์เซอร์จะไม่ลบข้อมูลในเครื่องนี้เอง", persisted === false ? "เบราว์เซอร์อาจลบข้อมูลเมื่อพื้นที่เต็ม — เพิ่มแอปไว้หน้าจอโฮม และส่งข้อมูลทุกวัน" : "กำลังตรวจสอบการป้องกันข้อมูล…"),

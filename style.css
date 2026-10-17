@@ -13,6 +13,15 @@
     --warn-soft: #33290f; --warn-ink: #f2c865; --good-soft: #15301a; --good-ink: #8fd88f;
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0f0f0e; --surface: #1a1a19; --surface-2: #242422; --ink: #f4f4f1; --ink-2: #c3c2b7; --muted: #92908a;
+  --line: #2f2f2c; --accent: #3fbf9c; --accent-ink: #06231c; --accent-soft: #15302a; --bad: #f2877e; --bad-soft: #3a1a17;
+  --warn-soft: #33290f; --warn-ink: #f2c865; --good-soft: #15301a; --good-ink: #8fd88f;
+}
+/* larger text for reading in the field (settings → การแสดงผล) */
+:root[data-size="l"] body { zoom: 1.12; }
+:root[data-size="xl"] body { zoom: 1.25; }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.55 var(--font); }
@@ -183,3 +192,35 @@ button.stat:hover { border-color: var(--muted); }
 .status-list li.ok::before { content: "✓"; color: var(--good-ink); }
 .status-list li.no { background: var(--warn-soft); color: var(--warn-ink); border-color: transparent; }
 .status-list li.no::before { content: "!"; color: var(--warn-ink); }
+
+/* v3 UI: bottom bar while interviewing, progress, onboarding, display settings */
+.rec-info { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+.rec-info .saved { color: var(--good-ink); }
+.pbar { flex: 1 1 100%; display: block; height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin: 4px 0 2px; }
+.pbar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s; }
+.pbar.thin { height: 4px; margin-top: 6px; max-width: 260px; }
+.formbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border-top: 1px solid var(--line); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.formbar:empty { display: none; }
+.formbar .btn { flex: none; min-height: 48px; padding: 8px 14px; }
+.fb-mid { flex: 1; min-width: 0; display: grid; gap: 1px; text-align: center; background: none; border: 0; padding: 4px; border-radius: 10px; color: var(--ink); font: inherit; cursor: pointer; }
+button.fb-mid:hover { background: var(--surface-2); }
+.fb-mid b { font-size: 15px; }
+.fb-mid small { color: var(--ink-2); font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-space { width: 96px; flex: none; }
+.form-main { padding-bottom: 96px; }
+@media (min-width: 901px) { .formbar { left: calc(max(0px, (100vw - 1180px) / 2) + 290px); right: auto; width: min(820px, calc(100vw - max(0px, (100vw - 1180px) / 2) - 306px)); bottom: 12px; border: 1px solid var(--line); border-radius: 16px; padding: 8px 12px; } }
+.endnext { width: 100%; margin: 18px 0 8px; }
+.onboard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; }
+.onboard h2 { margin: 0 0 8px; font-size: 16px; }
+.onboard ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.onboard li { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; }
+.onboard li b { display: block; font-size: 15px; }
+.onboard li small { display: block; color: var(--ink-2); font-size: 13px; }
+.onboard .dot { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 14px; }
+.onboard li.done .dot { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.onboard li.done b { color: var(--ink-2); text-decoration: line-through; text-decoration-color: var(--muted); }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface-2); border-radius: 12px; }
+.seg button { border: 0; background: none; padding: 8px 14px; border-radius: 9px; font: inherit; font-size: 14px; color: var(--ink-2); cursor: pointer; min-height: 40px; }
+.seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
