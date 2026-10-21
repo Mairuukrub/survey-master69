@@ -211,7 +211,6 @@
     const has = (k) => R.filter((r) => r[k] !== "" && r[k] != null), is1 = (k) => R.filter((r) => r[k] === 1);
     const disAns = has("ncd_any"), chronic = is1("ncd_any");
     const smokeAns = has("smoke_cur"), smokers = is1("smoke_cur");
-    const phqAns = has("phq2_pos"), phqPos = is1("phq2_pos");
     const bmiAns = has("bmi_cat"), obese = is1("obese");
     const dm = R.filter(hasOpt("q3_1", 1)), ht = R.filter(hasOpt("q3_1", 2));
     const pain = multi(R, "q7_1", { dropNone: true });
@@ -246,7 +245,6 @@
         kpi(fmtPct(chronic.length, disAns.length), "มีโรคประจำตัว", `${chronic.length}/${disAns.length} คน`),
         kpi(fmtPct(obese.length, bmiAns.length), "BMI ≥ 25 (อ้วน)", `${obese.length}/${bmiAns.length} คน`),
         kpi(fmtPct(smokers.length, smokeAns.length), "สูบบุหรี่ปัจจุบัน", `${smokers.length}/${smokeAns.length} คน`),
-        kpi(fmtPct(phqPos.length, phqAns.length), "คัดกรองซึมเศร้า (PHQ-2) ผลบวก", `${phqPos.length}/${phqAns.length} คน`),
         kpi(fmtPct(painAny.length, pain.d), "ปวดกล้ามเนื้อใน 3 เดือน", `${painAny.length}/${pain.d} คน`)),
 
       section("ข้อมูลทั่วไป",
@@ -297,15 +295,6 @@
         card("ปวดกล้ามเนื้อ: เกษตรกร เทียบอาชีพอื่น", null, bars([{ label: "เกษตรกร (ทำนา ทำไร่)", ...painIn(farmer) }, { label: "อาชีพอื่น/ไม่ได้ทำงาน", ...painIn(notFarmer) }], 0, { sort: false })),
         card("วิธีบรรเทาอาการ", null, bars(multi(R, "q7_1_2").items, multi(R, "q7_1_2").d))),
 
-      section("สุขภาพจิต",
-        card("คัดกรองซึมเศร้า 2 คำถาม (PHQ-2)", "ตอบ ‘มี’ อย่างน้อย 1 ข้อ = ควรประเมินต่อด้วย 9Q", bars([
-          { label: "หดหู่ เศร้า ท้อแท้สิ้นหวัง", n: R.filter(yes("q8_1_1", 1)).length, d: R.filter(answered("q8_1_1")).length },
-          { label: "เบื่อ ทำอะไรก็ไม่เพลิดเพลิน", n: R.filter(yes("q8_1_2", 1)).length, d: R.filter(answered("q8_1_2")).length },
-          { label: "มีอย่างน้อย 1 ข้อ", n: phqPos.length, d: phqAns.length },
-        ], 0, { sort: false })),
-        card("วิธีจัดการความเครียด", "ตอบได้หลายข้อ", bars(multi(R, "q8_3").items, multi(R, "q8_3").d)),
-        card("ขอความช่วยเหลือจากใคร", "ตอบได้หลายข้อ", bars(multi(R, "q8_4").items, multi(R, "q8_4").d))),
-
       section("สัตว์เลี้ยงและโรคจากสัตว์",
         card("ครัวเรือนที่เลี้ยงสัตว์แต่ละชนิด", `เลี้ยงสัตว์ ${petHh.length}/${R.filter(answered("q11_1")).length} ครัวเรือน`, bars(animals.map(([k, l]) => ({ label: l, n: petHh.filter((r) => String(r[`q11_2_${k}_has`]) === "2").length })), petHh.length)),
         card("สุนัขและแมวที่ได้รับวัคซีน", "จำนวนตัวที่ได้รับวัคซีน ÷ จำนวนตัวทั้งหมด", bars([["dog", "สุนัข"], ["cat", "แมว"]].map(([k, l]) => ({ label: l, n: animalSum(k, "vacc"), d: animalSum(k, "n") })), 0, { sort: false }))),
@@ -319,44 +308,6 @@
         card("ปัญหาสาธารณูปโภค", "ร้อยละที่ตอบ ‘บ่อยครั้ง’ (ไฟฟ้า ประปา) หรือ ‘มีปัญหา’ (ถนน)", bars(util, 0)),
         card("ปัญหาในชุมชนที่ผู้ตอบรับรู้", "ร้อยละที่ตอบว่า ‘มี’", bars(gridShare(R, "q14_2", [2]), 0)),
         card("ช่องทางรับข่าวสารในหมู่บ้าน", null, bars(multi(R, "q14_1_1").items, multi(R, "q14_1_1").d))),
-
-      section("อาการไข้ (เพิ่มใน v2)",
-        cardQ(R, "q15_1"), cardQ(R, "q15_3", { title: "สิ่งที่ทำเป็นอันดับแรกเมื่อมีไข้" }),
-        cardQ(R, "q15_4", { title: "วัดอุณหภูมิก่อนตัดสินใจไปโรงพยาบาล" }),
-        cardQ(R, "q15_6", { title: "ความเข้าใจ: เมื่อไหร่เรียกว่า “มีไข้”", sub: "คำตอบที่ถูกคือ ตัวร้อน · ตอบได้หลายข้อ" })),
-
-      section("การใช้ยาแก้ปวดและความปลอดภัย (เพิ่มใน v2)",
-        cardQ(R, "q16_1", { title: "ยาแก้ปวดที่ใช้ใน 3 เดือน" }),
-        Q.q16_4 ? card("พฤติกรรมเสี่ยงในการใช้ยาแก้ปวด", "ร้อยละของผู้ที่ใช้ยาแก้ปวดและตอบข้อนั้น", bars([
-          { label: "ไม่อ่านฉลากก่อนใช้", n: R.filter(yes("q16_4", 3)).length, d: R.filter(answered("q16_4")).length },
-          { label: "ไม่ทราบ/ไม่แน่ใจขนาดยา", n: R.filter((r) => ["2", "3"].includes(String(r.q16_5))).length, d: R.filter(answered("q16_5")).length },
-          { label: "เคยกินเกินขนาด", n: R.filter(yes("q16_6", 1)).length, d: R.filter(answered("q16_6")).length },
-          { label: "เคยใช้ 2 ชนิดที่ตัวยาซ้ำกัน", n: R.filter(yes("q16_7", 1)).length, d: R.filter(answered("q16_7")).length },
-          { label: "เคยใช้ NSAIDs หลายตัวพร้อมกัน", n: R.filter(yes("q16_8", 1)).length, d: R.filter(answered("q16_8")).length },
-          { label: "เคยแบ่งยาให้คนอื่น", n: R.filter(yes("q16_11", 1)).length, d: R.filter(answered("q16_11")).length },
-        ], 0)) : null,
-        cardQ(R, "q16_3", { title: "ผู้แนะนำให้ใช้ยา" })),
-
-      section("ยาเสพติดและผู้ป่วยจิตเวชในชุมชน (เพิ่มใน v2)",
-        cardQ(R, "q17_1", { title: "พบเห็น/รับรู้ปัญหายาเสพติดใน 1 ปี" }),
-        cardQ(R, "q17_2", { title: "สารเสพติดที่พบหรือสงสัย" }),
-        cardQ(R, "q17_4", { title: "ผลกระทบต่อตนเอง/ครอบครัว" }),
-        cardQ(R, "q17_6", { title: "สิ่งที่ทำเมื่อพบผู้มีอาการคลั่ง" }),
-        cardQ(R, "q17_7", { title: "อุปสรรคการบำบัด" }),
-        cardQ(R, "q17_8", { title: "มาตรการที่ชาวบ้านเห็นว่าดีที่สุด" })),
-
-      section("แหล่งน้ำและโรงงานใกล้บ้าน (เพิ่มใน v2)",
-        cardQ(R, "q18_1", { title: "แหล่งน้ำที่ครัวเรือนใช้" }),
-        cardQ(R, "q18_3", { title: "สิ่งผิดปกติที่เคยพบในแหล่งน้ำ" }),
-        cardQ(R, "q18_5", { title: "มีโรงงานในระยะ 1 กม." }),
-        cardQ(R, "q18_4", { title: "เคยกินปลาจากแหล่งน้ำชุมชนใน 12 เดือน" })),
-
-      section("ผู้ป่วยเบาหวาน/ความดัน และอาชีพ (เพิ่มใน v2)",
-        cardQ(R, "q3_8_1", { title: "เบาหวาน: ความถี่ในการตรวจน้ำตาล" }),
-        cardQ(R, "q3_8_4", { title: "เบาหวาน: จัดการแผลเล็กที่เท้าอย่างไร" }),
-        cardQ(R, "q3_9_1", { title: "ความดัน: ภาวะแทรกซ้อนที่เคยมี" }),
-        cardQ(R, "q2_2_8", { title: "เกษตรกร: อุปกรณ์ป้องกันที่ใช้" }),
-        cardQ(R, "q2_3_12", { title: "พนักงานโรงงาน: อาการหลังทำงาน" })),
 
       autoSection(R),
 
@@ -431,7 +382,7 @@
         h("div", { class: "xopts" },
           pick(true, "ไม่ระบุตัวตน (แนะนำ)", "ตัดบ้านเลขที่ ชื่อหมู่บ้าน วันเกิด ชื่อผู้สัมภาษณ์ และข้อความอิสระออก ใช้รหัสนิรนามแทน — ส่งต่อให้ผู้วิเคราะห์ได้"),
           pick(false, "ข้อมูลเต็ม", "มีข้อมูลระบุตัวตน ใช้ภายในทีมเท่านั้น ห้ามเผยแพร่")),
-        h("p", { class: "fine" }, `${real.length.toLocaleString("th-TH")} ครัวเรือน (ไม่รวมข้อมูลจำลอง) · ช่องตัวเลขที่ว่าง: -1 = ข้ามตามเงื่อนไข, -9 = ไม่ได้ตอบ · มีตัวแปรคำนวณ ${M69A.DERIVED.length} ตัว (กลุ่มอายุ BMI โรคประจำตัว PHQ-2 ฯลฯ) นิยามเดียวกับตัวเลขในหน้านี้`),
+        h("p", { class: "fine" }, `${real.length.toLocaleString("th-TH")} ครัวเรือน (ไม่รวมข้อมูลจำลอง) · ช่องตัวเลขที่ว่าง: -1 = ข้ามตามเงื่อนไข, -9 = ไม่ได้ตอบ · มีตัวแปรคำนวณ ${M69A.DERIVED.length} ตัว (กลุ่มอายุ BMI โรคประจำตัว ปวดกล้ามเนื้อ ฯลฯ) นิยามเดียวกับตัวเลขในหน้านี้`),
         h("div", { class: "xbtns" },
           h("button", { class: "btn primary", type: "button", disabled: !real.length, onclick: () => run(Object.keys(FILES)) }, "ดาวน์โหลดทั้งชุด (5 ไฟล์)"),
           Object.entries(FILES).map(([k, [label]]) => h("button", { class: "btn", type: "button", disabled: !real.length, onclick: () => run([k]) }, label))),

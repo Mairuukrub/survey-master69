@@ -42,8 +42,6 @@
       fn: (r) => (blank(r.q4_2) ? "" : yn(num(r.q4_2) === 2)) },
     { key: "no_exercise", label: "ไม่ออกกำลังกายเลย", codes: YES_NO, def: "ข้อ 4.3 = ไม่ออกกำลังกายเลย (1)",
       fn: (r) => (blank(r.q4_3) ? "" : yn(num(r.q4_3) === 1)) },
-    { key: "phq2_pos", label: "คัดกรองซึมเศร้า PHQ-2 ผลบวก", codes: YES_NO, def: "ข้อ 8.1.1 หรือ 8.1.2 ตอบ “มี” อย่างน้อย 1 ข้อ (ควรประเมินต่อด้วย 9Q)",
-      fn: (r) => (blank(r.q8_1_1) && blank(r.q8_1_2) ? "" : yn(num(r.q8_1_1) === 1 || num(r.q8_1_2) === 1)) },
     { key: "msk_pain", label: "ปวดกล้ามเนื้อในช่วง 3 เดือน", codes: YES_NO, def: "ข้อ 7.1 ตอบแล้ว และไม่ได้เลือก “ไม่มี”",
       fn: (r, f) => { const t = ticked(r, f, "q7_1"); return t == null ? "" : yn(!t.includes(noneCode(f, "q7_1"))); } },
     { key: "farmer", label: "อาชีพเกษตรกรรม", codes: YES_NO, def: "ข้อ 2.1 = เกษตรกรรม (1)",
