@@ -254,7 +254,7 @@
       section("ข้อมูลทั่วไป",
         card("อายุและเพศของผู้ให้ข้อมูล", `${age.length} คน`, pyramid(R)),
         card("อาชีพ", null, bars(single(R, "q2_1").items, single(R, "q2_1").d)),
-        card("รายได้รวมของครอบครัวต่อเดือน", null, bars(single(R, "q1_8").items, single(R, "q1_8").d, { sort: false })),
+        card("รายได้รวมเฉลี่ยของท่านต่อเดือน", null, bars(single(R, "q1_8").items, single(R, "q1_8").d, { sort: false })),
         card("ระดับการศึกษา", null, bars(single(R, "q1_7").items.filter((x) => x.n), single(R, "q1_7").d, { sort: false }))),
 
       section("สุขภาพร่างกาย",
