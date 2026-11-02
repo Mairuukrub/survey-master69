@@ -185,5 +185,9 @@
     return got.form.version !== window.SURVEY.version ? got.form.version : null;
   }
 
-  window.M69 = { setDisplay, getDisplay: () => load(KEY.display) || {}, OPS, evalRule, ruleRefs, columnSpec, questions, validateForm, fetchPublished, refresh, source: chosen.source, preview, KEY };
+  // house numbers typed many ways ("12-3", "๑๒/๓", "12 / 3") become one form ("12/3") so duplicates and grouping work
+  const normHouseNo = (s) => String(s == null ? "" : s).replace(/[๐-๙]/g, (c) => "๐๑๒๓๔๕๖๗๘๙".indexOf(c)).replace(/[\s​]+/g, "").replace(/[-–—\\／]/g, "/");
+  const validHouseNo = (n) => /^\d{1,4}(\/\d{1,3})?$/.test(n);
+
+  window.M69 = { normHouseNo, validHouseNo, setDisplay, getDisplay: () => load(KEY.display) || {}, OPS, evalRule, ruleRefs, columnSpec, questions, validateForm, fetchPublished, refresh, source: chosen.source, preview, KEY };
 })();

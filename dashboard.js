@@ -228,7 +228,11 @@
     const SHORT_MIN = 10;   // a full interview in under 10 minutes deserves a second look
     // same house interviewed twice (possibly on different phones, which the form itself cannot see)
     const houses = {};
-    R.forEach((r) => { if (!r.h_house_no || !r.h_moo) return; const k = `${r.h_moo}|${String(r.h_house_no).replace(/\s+/g, "")}`; (houses[k] = houses[k] || []).push(r); });
+    R.forEach((r) => {
+      const t = num(r.h_house_type), n = M69.normHouseNo(r.h_house_no);
+      if ((t != null && t !== 1) || !/^\d/.test(n) || !r.h_moo) return;   // "no number / unknown" houses never match each other
+      const k = `${r.h_moo}|${n}`; (houses[k] = houses[k] || []).push(r);
+    });
     const dupHouses = Object.values(houses).filter((g) => g.length > 1);
     const dates = {};
     R.forEach((r) => (dates[r.iv_date] = (dates[r.iv_date] || 0) + 1));

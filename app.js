@@ -81,7 +81,8 @@
 
   // ------------------------------------------------------------ columns / flatten (what goes to Google Sheets)
   const COLUMNS = M69.columnSpec(S);
-  const TEXT_COLUMNS = ["uuid", "record_id", "h_house_no", "h_village", "h_tambon", "h_amphoe", "h_province", "iv_first", "iv_last", "iv_faculty", "iv_zone", "iv_date"];
+  const FIELDWORK = { from: "2026-11-04", to: "2026-11-13" };   // soft warning only: interview dates outside this window
+  const TEXT_COLUMNS = ["uuid", "record_id", "h_house_no", "h_house_note","h_village", "h_tambon", "h_amphoe", "h_province", "iv_first", "iv_last", "iv_faculty", "iv_zone", "iv_date"];
 
   function progress(a) {
     const vis = allQuestions.filter((q) => q.type !== "computed" && visible(q, a));
@@ -141,20 +142,24 @@
   // ------------------------------------------------------------ records
   function newRecord() {
     const rem = load(LS.remember, {});
-    const answers = { h_province: "ขอนแก่น", iv_date: todayIso(), ...rem };
+    const defaults = {};   // q.default = pre-filled but editable; wins over a stale remembered value
+    allQuestions.forEach((q) => { if (q.default != null) defaults[q.id] = q.default; });
+    const answers = { h_province: "ขอนแก่น", iv_date: todayIso(), ...rem, ...defaults };
     const rec = { uuid: uuid(), record_id: "", created_at: nowIso(), updated_at: nowIso(), status: "draft", answers };
     records[rec.uuid] = rec;
     saveRecords();
     return rec;
   }
-  function recordId(a) {
+  function recordId(a, id) {
     const d = (a.iv_date || todayIso()).replace(/-/g, "");
-    return `M${a.h_moo || "?"}-${String(a.h_house_no || "?").replace(/[^\w/-]/g, "")}-${d}`;
+    const noNumber = a.h_house_type === 2 || a.h_house_type === 3;   // no real number to tell houses apart: add a short unique tail
+    const no = noNumber ? `${a.h_house_type === 2 ? "NONO" : "UNK"}-${String(id || "").slice(0, 4)}` : String(M69.normHouseNo(a.h_house_no) || "?").replace(/[^\w/-]/g, "");
+    return `M${a.h_moo || "?"}-${no}-${d}`;
   }
   function touch(rec) {
     rec.updated_at = nowIso();
     if (!rec.started_at) rec.started_at = rec.updated_at;   // first answer = interview starts
-    rec.record_id = recordId(rec.answers);
+    rec.record_id = recordId(rec.answers, rec.uuid);
     if (rec.status === "sent") rec.status = "ready";  // edited after sending: send again (upsert by uuid)
     saveRecords();
   }
@@ -168,7 +173,12 @@
   const qById = new Map(allQuestions.map((q) => [q.id, q]));
   const sectionOf = (id) => S.sections.findIndex((s) => s.q.some((q) => q.id === id));
   const filled = (v) => v != null && v !== "";
-  const houseKey = (a) => (filled(a.h_house_no) && filled(a.h_moo) ? `${a.h_moo}|${String(a.h_house_no).replace(/\s+/g, "")}` : "");
+  // two houses are "the same" only when both have a real number: "no number / unknown" must never match each other
+  const houseKey = (a) => {
+    if (a.h_house_type != null && a.h_house_type !== 1) return "";
+    const n = M69.normHouseNo(a.h_house_no);
+    return /^\d/.test(n) && filled(a.h_moo) ? `${a.h_moo}|${n}` : "";
+  };
   function duplicatesOf(rec) {
     const k = houseKey(rec.answers);
     return k ? Object.values(records).filter((r) => r.uuid !== rec.uuid && houseKey(r.answers) === k) : [];
@@ -201,6 +211,8 @@
         if (filled(a[`${k}_n`]) && filled(a[`${k}_${f}`]) && a[`${k}_${f}`] > a[`${k}_n`]) add(q.id, `${x.t}: จำนวนที่${l} (${a[`${k}_${f}`]}) มากกว่าจำนวนทั้งหมด (${a[`${k}_n`]})`);
       });
     }));
+    if (shown("h_house_no") && filled(a.h_house_no) && !M69.validHouseNo(M69.normHouseNo(a.h_house_no))) add("h_house_no", "บ้านเลขที่ควรเป็นตัวเลข เช่น 12 หรือ 12/3 — ตรวจอีกครั้ง (ถ้าไม่มีเลขที่ ให้เลือก “ไม่มีบ้านเลขที่” หรือ “ไม่ทราบ” ด้านบน)");
+    if (shown("iv_date") && filled(a.iv_date) && (a.iv_date < FIELDWORK.from || a.iv_date > FIELDWORK.to)) add("iv_date", `วันที่ ${a.iv_date} อยู่นอกช่วงภาคสนาม (4–13 พ.ย. 2569) — ตรวจวันที่ หรือนาฬิกาของเครื่อง`);
     const dups = duplicatesOf(rec);
     if (dups.length) add("h_house_no", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นบ้านเดียวกัน ให้แก้ชุดเดิมแทน`);
     return out;
@@ -298,6 +310,19 @@
   }
 
   function choice(q, a, rec, multi) {
+    if (!multi && q.ui === "select") {   // single choice shown as a dropdown (same codes/columns as radio)
+      if (a[q.id] != null && !q.o.some((x) => x.v === a[q.id])) delete a[q.id];   // stale remembered value from an older form
+      const picked = q.o.find((x) => x.v === a[q.id]);
+      const sel = h("select", {
+        name: q.id,
+        onchange: (e) => {
+          if (e.target.value === "") delete a[q.id]; else a[q.id] = Number(e.target.value);
+          touch(rec); renderSection(rec, { keepScroll: true });
+        },
+      }, h("option", { value: "" }, "— เลือก —"),
+        q.o.map((x) => h("option", { value: x.v, selected: x.v === a[q.id] }, x.label)));
+      return h("div", { class: "opts-select" }, sel, picked && picked.other ? optionText(q, a, picked) : null);
+    }
     const box = h("div", { class: "opts" + (q.o.length > 4 ? " many" : "") });
     q.o.forEach((x) => {
       const on = multi ? (a[q.id] || []).includes(x.v) : a[q.id] === x.v;
@@ -356,7 +381,10 @@
       case "multi": body = choice(q, a, rec, true); break;
       case "text":
         if (q.fixed) { a[q.id] = q.fixed; body = h("div", { class: "fixed" }, q.fixed); break; }
-        body = h("input", { type: "text", value: a[q.id] || "", oninput: (e) => { a[q.id] = e.target.value; touchDebounced(); } });
+        body = h("input", {
+          type: "text", value: a[q.id] || "", oninput: (e) => { a[q.id] = e.target.value; touchDebounced(); },
+          onchange: q.fmt === "houseno" ? (e) => { const v = M69.normHouseNo(e.target.value); e.target.value = v; a[q.id] = v; touch(rec); refreshChecks(rec); } : null,
+        });
         break;
       case "textarea": body = h("textarea", { rows: 3, oninput: (e) => { a[q.id] = e.target.value; touchDebounced(); } }, a[q.id] || ""); break;
       case "date": body = h("input", { type: "date", value: a[q.id] || "", oninput: (e) => { a[q.id] = e.target.value; touchDebounced(); } }); break;
@@ -808,7 +836,7 @@
     for (let run = 0; run < 25; run++) {
       const rec = newRecord();
       const a = rec.answers;
-      Object.assign(a, { h_house_no: `${rnd(200)}/${rnd(9)}`, h_moo: 11, h_village: "บึงสว่าง", h_tambon: "บ้านเหล่า", h_amphoe: "บ้านฝาง", iv_first: "ทดสอบ", iv_last: "ระบบ", iv_faculty: "สาธารณสุขศาสตร์", iv_zone: "1" });
+      Object.assign(a, { h_house_no: `${rnd(200)}/${rnd(9)}`, h_moo: 11, h_village: "บึงสว่าง", h_tambon: "บ้านเหล่า", h_amphoe: "บ้านฝาง", iv_first: "ทดสอบ", iv_last: "ระบบ", iv_faculty: 4, iv_zone: "1" });
       for (let pass = 0; pass < 3; pass++) {  // answers can reveal later questions
         for (const q of allQuestions) {
           if (!visible(q, a) || isAnswered(q, a)) continue;
@@ -903,14 +931,14 @@
       q13_4_1_1a: [15, 45, 40], q13_4_1_1b: [20, 40, 40], q13_4_2_1a: [20, 45, 35], q13_4_2_1b: [18, 42, 40],
       q14_2_1: [40, 45, 15], q14_2_2: [65, 25, 10], q14_2_3: [55, 30, 15], q14_2_4: [30, 60, 10], q14_2_5: [25, 65, 10], q14_2_6: [60, 25, 15], q14_2_7: [45, 35, 20], q14_2_8: [55, 35, 10], q14_2_9: [55, 20, 25],
     };
-    const students = [["ณัฐชา", "ทดสอบ", "พยาบาลศาสตร์"], ["ปวริศ", "ทดสอบ", "แพทยศาสตร์"], ["กมลชนก", "ทดสอบ", "สาธารณสุขศาสตร์"], ["ธนกฤต", "ทดสอบ", "ทันตแพทยศาสตร์"], ["พิมพ์ชนก", "ทดสอบ", "เภสัชศาสตร์"], ["ศุภกร", "ทดสอบ", "เทคนิคการแพทย์"]];
+    const students = [["ณัฐชา", "ทดสอบ", 3], ["ปวริศ", "ทดสอบ", 1], ["กมลชนก", "ทดสอบ", 4], ["ธนกฤต", "ทดสอบ", 2], ["พิมพ์ชนก", "ทดสอบ", 5], ["ศุภกร", "ทดสอบ", 7]];   // iv_faculty = option code (1=MD … 8=AMS-PT)
     const houses = [...Array(200).keys()].map((i) => i + 1).sort(() => R() - 0.5);
     const recs = [];
     for (let i = 0; i < n; i++) {
       const st = students[i % students.length];
       const d = new Date(Date.now() - Math.floor(R() * 5) * 864e5);
       const a = {
-        h_house_no: String(houses[i % houses.length]), h_moo: 11, h_village: "บึงสว่าง", h_tambon: "บ้านเหล่า", h_amphoe: "บ้านฝาง", h_province: "ขอนแก่น",
+        h_house_type: 1, h_house_no: String(houses[i % houses.length]), h_moo: 11, h_village: "บึงสว่าง", h_tambon: "บ้านเหล่า", h_amphoe: "บ้านฝาง", h_province: "ขอนแก่น",
         iv_first: st[0], iv_last: st[1], iv_faculty: st[2], iv_zone: "MOCK", iv_note: "ข้อมูลจำลองสำหรับทดสอบ (MOCK) ลบได้",
         iv_date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
       };
