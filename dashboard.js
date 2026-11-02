@@ -226,14 +226,28 @@
     });
     const median = (v) => { if (!v.length) return null; const s = [...v].sort((p, q) => p - q), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
     const SHORT_MIN = 10;   // a full interview in under 10 minutes deserves a second look
-    // same house interviewed twice (possibly on different phones, which the form itself cannot see)
+    // several people per house are expected (the unit is the person); group rows by house to count coverage
+    // and to spot the same person entered twice (possibly on different phones, which the form itself cannot see)
     const houses = {};
+    let noKeyRows = 0;   // "no number / unknown" houses never match each other: each row counts as its own house
     R.forEach((r) => {
       const t = num(r.h_house_type), n = M69.normHouseNo(r.h_house_no);
-      if ((t != null && t !== 1) || !/^\d/.test(n) || !r.h_moo) return;   // "no number / unknown" houses never match each other
+      if ((t != null && t !== 1) || !/^\d/.test(n) || !r.h_moo) { noKeyRows++; return; }
       const k = `${r.h_moo}|${n}`; (houses[k] = houses[k] || []).push(r);
     });
-    const dupHouses = Object.values(houses).filter((g) => g.length > 1);
+    const housesCovered = Object.keys(houses).length + noKeyRows;
+    const multiHouses = Object.values(houses).filter((g) => g.length > 1);
+    const samePerson = [];   // same house + same sex + same full birth date
+    multiHouses.forEach((g) => {
+      const by = {};
+      g.forEach((r) => {
+        if (!String(r.q1_1 ?? "").trim() || !String(r.q1_2_day ?? "").trim() || !String(r.q1_2_month ?? "").trim() || !String(r.q1_2_year_be ?? "").trim()) return;
+        const k = `${r.q1_1}|${r.q1_2_year_be}-${r.q1_2_month}-${r.q1_2_day}`; (by[k] = by[k] || []).push(r);
+      });
+      Object.values(by).forEach((x) => { if (x.length > 1) samePerson.push(x); });
+    });
+    const HOUSES_TOTAL = 224;   // from the field-training manual (zone 8, p.7); replace when the real house list is known
+    const who = (r) => `${[r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ"} · ${r.iv_date || ""}`;
     const dates = {};
     R.forEach((r) => (dates[r.iv_date] = (dates[r.iv_date] || 0) + 1));
     const animals = [["cattle", "โค/กระบือ"], ["poultry", "สัตว์ปีก"], ["dog", "สุนัข"], ["cat", "แมว"], ["pig", "สุกร"]];
@@ -243,7 +257,8 @@
 
     return h("div", null,
       h("div", { class: "kpis" },
-        kpi(n.toLocaleString("th-TH"), "ครัวเรือนที่สัมภาษณ์"),
+        kpi(n.toLocaleString("th-TH"), "ผู้ให้ข้อมูล (คน)"),
+        kpi(housesCovered.toLocaleString("th-TH"), "บ้านที่ครอบคลุม", `จาก ${HOUSES_TOTAL} หลัง · ${fmtPct(housesCovered, HOUSES_TOTAL)}`),
         kpi(age.length ? (age.reduce((a, b) => a + b, 0) / age.length).toFixed(1) : "–", "อายุเฉลี่ยผู้ให้ข้อมูล (ปี)"),
         kpi(fmtPct(age.filter((a) => a >= 60).length, age.length), "อายุ 60 ปีขึ้นไป"),
         kpi(fmtPct(chronic.length, disAns.length), "มีโรคประจำตัว", `${chronic.length}/${disAns.length} คน`),
@@ -316,18 +331,23 @@
       autoSection(R),
 
       section("คุณภาพการเก็บข้อมูล",
-        card("รายผู้สัมภาษณ์", `เวลาสัมภาษณ์นับจากคำตอบแรกถึงกดบันทึก · สั้นกว่า ${SHORT_MIN} นาทีควรตรวจสอบ`, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", { class: "n" }, "ครัวเรือน"), h("th", { class: "n" }, "ตอบครบเฉลี่ย"), h("th", { class: "n" }, "เวลา (มัธยฐาน)"), h("th", { class: "n" }, `< ${SHORT_MIN} นาที`))),
+        card("รายผู้สัมภาษณ์", `เวลาสัมภาษณ์นับจากคำตอบแรกถึงกดบันทึก · สั้นกว่า ${SHORT_MIN} นาทีควรตรวจสอบ`, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", { class: "n" }, "คน"), h("th", { class: "n" }, "ตอบครบเฉลี่ย"), h("th", { class: "n" }, "เวลา (มัธยฐาน)"), h("th", { class: "n" }, `< ${SHORT_MIN} นาที`))),
           h("tbody", null, Object.entries(ivs).sort((a, b) => b[1].pct.length - a[1].pct.length).map(([k, v]) => {
             const md = median(v.min), short = v.min.filter((m) => m < SHORT_MIN).length;
             return h("tr", null, h("td", null, k), h("td", { class: "n" }, v.pct.length), h("td", { class: "n" }, `${(v.pct.reduce((a, b) => a + b, 0) / v.pct.length).toFixed(0)}%`),
               h("td", { class: "n" }, md == null ? "–" : `${Math.round(md)} นาที`), h("td", { class: "n" + (short ? " flag" : "") }, v.min.length ? short : "–"));
           })))),
-        card("บ้านที่ถูกสัมภาษณ์ซ้ำ", "หมู่และบ้านเลขที่เดียวกันมากกว่า 1 แถว — ควรเก็บแถวที่ครบกว่าแล้วลบอีกแถวใน Sheet",
-          dupHouses.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "หมู่ / บ้านเลขที่"), h("th", { class: "n" }, "แถว"), h("th", null, "ผู้สัมภาษณ์ · วันที่"))),
-            h("tbody", null, dupHouses.map((g) => h("tr", null, h("td", null, `หมู่ ${g[0].h_moo} · ${g[0].h_house_no}`), h("td", { class: "n flag" }, g.length),
-              h("td", null, g.map((r) => `${[r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ"} · ${r.iv_date || ""}`).join(" / "))))))
-            : h("p", { class: "empty-c" }, "ไม่พบบ้านซ้ำ")),
-        card("รายวันที่สัมภาษณ์", null, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "วันที่"), h("th", { class: "n" }, "ครัวเรือน"))),
+        card("อาจเป็นคนเดียวกันที่ถูกสัมภาษณ์ซ้ำ", "บ้านเลขที่ เพศ และวันเกิดตรงกันมากกว่า 1 แถว — ถ้าเป็นคนเดียวกัน ควรเก็บแถวที่ครบกว่าแล้วลบอีกแถวใน Sheet",
+          samePerson.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "หมู่ / บ้านเลขที่"), h("th", { class: "n" }, "แถว"), h("th", null, "ผู้สัมภาษณ์ · วันที่"))),
+            h("tbody", null, samePerson.map((g) => h("tr", null, h("td", null, `หมู่ ${g[0].h_moo} · ${g[0].h_house_no}`), h("td", { class: "n flag" }, g.length),
+              h("td", null, g.map(who).join(" / "))))))
+            : h("p", { class: "empty-c" }, "ไม่พบคนซ้ำ")),
+        card("บ้านที่สัมภาษณ์มากกว่า 1 คน", `ปกติ ไม่ต้องแก้ไข · ${multiHouses.length} หลัง จาก ${housesCovered} หลังที่ครอบคลุม`,
+          multiHouses.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "หมู่ / บ้านเลขที่"), h("th", { class: "n" }, "คน"), h("th", null, "ผู้สัมภาษณ์ · วันที่"))),
+            h("tbody", null, multiHouses.sort((a, b) => b.length - a.length).map((g) => h("tr", null, h("td", null, `หมู่ ${g[0].h_moo} · ${g[0].h_house_no}`), h("td", { class: "n" }, g.length),
+              h("td", null, g.map(who).join(" / "))))))
+            : h("p", { class: "empty-c" }, "ยังไม่มีบ้านที่สัมภาษณ์มากกว่า 1 คน")),
+        card("รายวันที่สัมภาษณ์", null, h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "วันที่"), h("th", { class: "n" }, "คน"))),
           h("tbody", null, Object.entries(dates).sort().map(([k, v]) => h("tr", null, h("td", null, k), h("td", { class: "n" }, v))))))));
   }
 

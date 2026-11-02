@@ -154,7 +154,10 @@
     const d = (a.iv_date || todayIso()).replace(/-/g, "");
     const noNumber = a.h_house_type === 2 || a.h_house_type === 3;   // no real number to tell houses apart: add a short unique tail
     const no = noNumber ? `${a.h_house_type === 2 ? "NONO" : "UNK"}-${String(id || "").slice(0, 4)}` : String(M69.normHouseNo(a.h_house_no) || "?").replace(/[^\w/-]/g, "");
-    return `M${a.h_moo || "?"}-${no}-${d}`;
+    // several people may be interviewed in one house on one day: a short tail from the uuid keeps record_id unique
+    // (no-number houses already carry one; MOCK rows have no uuid and keep the old shape)
+    const tail = !noNumber && id ? `-${String(id).slice(0, 4)}` : "";
+    return `M${a.h_moo || "?"}-${no}-${d}${tail}`;
   }
   function touch(rec) {
     rec.updated_at = nowIso();
@@ -179,9 +182,21 @@
     const n = M69.normHouseNo(a.h_house_no);
     return /^\d/.test(n) && filled(a.h_moo) ? `${a.h_moo}|${n}` : "";
   };
-  function duplicatesOf(rec) {
+  // Several people per house are allowed, so a house number alone is never a duplicate.
+  // Only "same house + same sex + same full birth date" suggests the same person was interviewed twice.
+  const personKey = (a) => {
+    const hk = houseKey(a);
+    if (!hk || !filled(a.q1_1) || !filled(a.q1_2_day) || !filled(a.q1_2_month) || !filled(a.q1_2_year_be)) return "";
+    return `${hk}|${a.q1_1}|${a.q1_2_year_be}-${a.q1_2_month}-${a.q1_2_day}`;
+  };
+  // other records of the same house on this device (any status): used for an informational note only
+  function housematesOf(rec) {
     const k = houseKey(rec.answers);
     return k ? Object.values(records).filter((r) => r.uuid !== rec.uuid && houseKey(r.answers) === k) : [];
+  }
+  function samePersonOf(rec) {
+    const k = personKey(rec.answers);
+    return k ? Object.values(records).filter((r) => r.uuid !== rec.uuid && personKey(r.answers) === k) : [];
   }
   function checks(rec) {
     const a = rec.answers, out = [];
@@ -213,8 +228,8 @@
     }));
     if (shown("h_house_no") && filled(a.h_house_no) && !M69.validHouseNo(M69.normHouseNo(a.h_house_no))) add("h_house_no", "บ้านเลขที่ควรเป็นตัวเลข เช่น 12 หรือ 12/3 — ตรวจอีกครั้ง (ถ้าไม่มีเลขที่ ให้เลือก “ไม่มีบ้านเลขที่” หรือ “ไม่ทราบ” ด้านบน)");
     if (shown("iv_date") && filled(a.iv_date) && (a.iv_date < FIELDWORK.from || a.iv_date > FIELDWORK.to)) add("iv_date", `วันที่ ${a.iv_date} อยู่นอกช่วงภาคสนาม (4–13 พ.ย. 2569) — ตรวจวันที่ หรือนาฬิกาของเครื่อง`);
-    const dups = duplicatesOf(rec);
-    if (dups.length) add("h_house_no", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นบ้านเดียวกัน ให้แก้ชุดเดิมแทน`);
+    const dups = samePersonOf(rec);
+    if (shown("q1_2") && dups.length) add("q1_2", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีชุดที่เพศและวันเกิดตรงกันในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นคนเดียวกัน ให้แก้ชุดเดิมแทน ถ้าเป็นคนละคน (เช่น คนในบ้านเดียวกัน) ไม่ต้องทำอะไร`);
     return out;
   }
   // fill the yellow note under each question on screen
@@ -226,6 +241,12 @@
       const msgs = by[el.dataset.q] || [];
       el.hidden = !msgs.length;
       mount(el, msgs.map((m) => h("div", null, m)));
+    });
+    // neutral note (not a warning): how many people from this house are already on this device
+    document.querySelectorAll(".qinfo").forEach((el) => {
+      const others = housematesOf(rec), a = rec.answers;
+      el.hidden = !others.length;
+      mount(el, others.length ? [h("div", null, `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้ ${others.length + 1} ชุด (รวมชุดนี้) · เห็นเฉพาะข้อมูลในเครื่องนี้ ไม่รวมเครื่องอื่น`)] : []);
     });
   }
 
@@ -448,6 +469,7 @@
       }
     }
     card.append(body, h("div", { class: "qwarn", "data-q": q.id, hidden: true, role: "status" }));
+    if (q.id === "h_house_no") card.append(h("div", { class: "qinfo", "data-q": q.id, hidden: true, role: "status" }));
     return card;
   }
 
@@ -592,7 +614,7 @@
         h("small", null, `${a.iv_date || ""} · ${[a.iv_first, a.iv_last].filter(Boolean).join(" ")} · ตอบแล้ว ${progress(a)}%`),
         h("span", { class: "pbar thin" }, h("i", { style: `width:${progress(a)}%` })),
         r.error && r.status === "ready" ? h("small", { class: "err" }, `ส่งไม่สำเร็จ: ${r.error}`) : null),
-      duplicatesOf(r).length ? h("span", { class: "chip dup", title: "มีบ้านเลขที่และหมู่เดียวกันในเครื่องนี้มากกว่า 1 ชุด" }, "บ้านซ้ำ?") : null,
+      samePersonOf(r).length ? h("span", { class: "chip dup", title: "บ้านเลขที่ เพศ และวันเกิดตรงกับอีกชุดในเครื่องนี้ — อาจเป็นคนเดียวกันที่ถูกสัมภาษณ์ซ้ำ" }, "คนซ้ำ?") : null,
       h("span", { class: `chip ${st[1]}` }, st[0]),
       r.status !== "sent" ? del : null);
   }
@@ -819,7 +841,8 @@
           h("dl", null,
             h("dt", null, "ส่งไม่ได้: “รหัสทีมไม่ถูกต้อง”"), h("dd", null, "ตรวจรหัสทีมในหน้าตั้งค่า (ตัวพิมพ์ เว้นวรรค) แล้วกดทดสอบอีกครั้ง"),
             h("dt", null, "ส่งไม่ได้: “ตอบกลับไม่ใช่ JSON”"), h("dd", null, "URL ต้องเป็นของ Apps Script และลงท้ายด้วย /exec — คัดลอกจากหัวหน้าทีมใหม่"),
-            h("dt", null, "ขึ้น “บ้านซ้ำ?” ในรายการ"), h("dd", null, "มีบ้านเลขที่และหมู่เดียวกัน 2 ชุด ถ้าเป็นบ้านเดียวกันให้เก็บชุดที่ครบกว่า แล้วลบอีกชุด (ลบได้เฉพาะชุดที่ยังไม่ส่ง)"),
+            h("dt", null, "สัมภาษณ์หลายคนในบ้านเดียวกัน"), h("dd", null, "ทำได้ กรอกบ้านเลขที่เดิมแล้วเริ่มชุดใหม่สำหรับแต่ละคน ไม่ต้องลบหรือแก้ชุดของคนก่อนหน้า"),
+            h("dt", null, "ขึ้น “คนซ้ำ?” ในรายการ"), h("dd", null, "บ้านเลขที่ เพศ และวันเกิดตรงกับอีกชุด แปลว่าอาจสัมภาษณ์คนเดียวกันซ้ำ ถ้าใช่ให้เก็บชุดที่ครบกว่า แล้วลบอีกชุด (ลบได้เฉพาะชุดที่ยังไม่ส่ง) ถ้าเป็นคนละคนไม่ต้องทำอะไร"),
             h("dt", null, "มีแถบ “แบบสอบถามเวอร์ชันใหม่”"), h("dd", null, "กลับหน้ารายการแล้วกด “โหลดใหม่” คำตอบที่กรอกไว้ไม่หาย"))),
         h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version}`)));
     updateNet();
