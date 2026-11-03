@@ -226,3 +226,11 @@ button.fb-mid:hover { background: var(--surface-2); }
 .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface-2); border-radius: 12px; }
 .seg button { border: 0; background: none; padding: 8px 14px; border-radius: 9px; font: inherit; font-size: 14px; color: var(--ink-2); cursor: pointer; min-height: 40px; }
 .seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+
+/* r2: rank questions (tap to rank) and "ไม่ทราบ" next to animal counts */
+.opts.rank .opt .code { font-weight: 600; }
+.opts.rank .opt:not(.on) .code { background: var(--surface-2); color: var(--muted); }
+.ranksum { margin-top: 2px; color: var(--ink-2); font-size: 14px; }
+.afields .afield { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.afields .unk { gap: 6px; color: var(--muted); font-size: 13px; }
+.afields input[type="checkbox"] { width: auto; }

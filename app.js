@@ -106,6 +106,13 @@
           if (a[q.id] != null) row[q.id] = a[q.id];
           q.o.filter((x) => x.other && a[q.id] === x.v).forEach((x) => (row[`${q.id}_o${x.v}_text`] = a[`${q.id}__${x.v}`] || ""));
           break;
+        case "rank": {   // rank 1 in the plain column, the rest in _r2 / _r3
+          if (a[q.id] != null) row[q.id] = a[q.id];
+          for (let k = 2; k <= (q.max || 3); k++) if (a[`${q.id}_r${k}`] != null) row[`${q.id}_r${k}`] = a[`${q.id}_r${k}`];
+          const picks = rankOf(q, a);
+          q.o.filter((x) => x.other && picks.includes(x.v)).forEach((x) => (row[`${q.id}_o${x.v}_text`] = a[`${q.id}__${x.v}`] || ""));
+          break;
+        }
         case "multi":
           if (Array.isArray(a[q.id])) q.o.forEach((x) => {
             const on = a[q.id].includes(x.v);
@@ -121,9 +128,13 @@
             const has = a[`${q.id}_${x.key}_has`];
             if (has != null) row[`${q.id}_${x.key}_has`] = has;
             if (has === 2) {
-              ["n", "vacc", "deworm", ...(x.other ? ["name"] : [])].forEach((k) => {
+              if (x.other) { const v = a[`${q.id}_${x.key}_name`]; if (v != null && v !== "") row[`${q.id}_${x.key}_name`] = v; }
+              const unk = (k) => a[`${q.id}_${x.key}_${k}_unk`] === 1;
+              ["n", "vacc", "deworm"].forEach((k) => {
+                if (k !== "n" && unk("n")) return;   // count unknown: vaccine / deworm are not asked
+                row[`${q.id}_${x.key}_${k}_unk`] = unk(k) ? 1 : 0;
                 const v = a[`${q.id}_${x.key}_${k}`];
-                if (v != null && v !== "") row[`${q.id}_${x.key}_${k}`] = v;
+                if (!unk(k) && v != null && v !== "") row[`${q.id}_${x.key}_${k}`] = v;
               });
             }
           });
@@ -226,6 +237,13 @@
         if (filled(a[`${k}_n`]) && filled(a[`${k}_${f}`]) && a[`${k}_${f}`] > a[`${k}_n`]) add(q.id, `${x.t}: จำนวนที่${l} (${a[`${k}_${f}`]}) มากกว่าจำนวนทั้งหมด (${a[`${k}_n`]})`);
       });
     }));
+    // alcohol answered twice (4.2 and the 9.14 frequency row): flag a contradiction, never block
+    if (shown("q10_grid") && filled(a.q4_2) && filled(a.q10_alc)) {
+      if (a.q4_2 === 1 && a.q10_alc !== 4) add("q10_grid", "ข้อ 4.2 ตอบว่าไม่ดื่มแอลกอฮอล์ แต่ข้อ 9.14 ตอบว่าดื่ม — ตรวจอีกครั้ง");
+      else if (a.q4_2 === 2 && a.q10_alc === 4) add("q10_grid", "ข้อ 4.2 ตอบว่าดื่มแอลกอฮอล์ แต่ข้อ 9.14 ตอบว่าไม่เคย — ตรวจอีกครั้ง");
+    }
+    if (shown("q5_2_1") && a.q5_2 === 1 && ((Array.isArray(a.q5_2_1) && a.q5_2_1.some((v) => v !== 1)) || a.q5_2_2 === 2))
+      add("q5_2_1", "ข้อ 5.2 ตอบว่าไม่เคยเข้ารับการรักษาใน 1 ปี แต่ข้อ 5.2.1 / 5.2.2 ตอบว่าเคยพบแพทย์หรือนอนโรงพยาบาล — ตรวจอีกครั้ง");
     if (shown("h_house_no") && filled(a.h_house_no) && !M69.validHouseNo(M69.normHouseNo(a.h_house_no))) add("h_house_no", "บ้านเลขที่ควรเป็นตัวเลข เช่น 12 หรือ 12/3 — ตรวจอีกครั้ง (ถ้าไม่มีเลขที่ ให้เลือก “ไม่มีบ้านเลขที่” หรือ “ไม่ทราบ” ด้านบน)");
     if (shown("iv_date") && filled(a.iv_date) && (a.iv_date < FIELDWORK.from || a.iv_date > FIELDWORK.to)) add("iv_date", `วันที่ ${a.iv_date} อยู่นอกช่วงภาคสนาม (4–13 พ.ย. 2569) — ตรวจวันที่ หรือนาฬิกาของเครื่อง`);
     const dups = samePersonOf(rec);
@@ -373,6 +391,49 @@
     return box;
   }
 
+  // rank question: rank 1 lives in a[q.id] (so skip rules and charts that read it keep working), the rest in a[q.id_r2], a[q.id_r3]
+  const rankKey = (q, k) => (k === 1 ? q.id : `${q.id}_r${k}`);
+  function rankOf(q, a) {
+    const out = [];
+    for (let k = 1; k <= (q.max || 3); k++) if (a[rankKey(q, k)] != null) out.push(a[rankKey(q, k)]);
+    return out;
+  }
+  function setRank(q, a, list) {
+    for (let k = 1; k <= (q.max || 3); k++) { if (list[k - 1] != null) a[rankKey(q, k)] = list[k - 1]; else delete a[rankKey(q, k)]; }
+  }
+  // tap an option to give it the next rank, tap again to take it back; the badge shows the rank
+  function rankChoice(q, a, rec) {
+    const max = q.max || 3, ranks = rankOf(q, a);
+    const isExcl = (v) => !!(q.o.find((y) => y.v === v) || {}).exclusive;
+    const box = h("div", { class: "opts rank" + (q.o.length > 4 ? " many" : "") });
+    q.o.forEach((x) => {
+      const pos = ranks.indexOf(x.v), on = pos >= 0;
+      const input = h("input", {
+        type: "checkbox", name: q.id, checked: on,
+        onchange: () => {
+          let cur = ranks.slice();
+          if (on) cur.splice(pos, 1);
+          else if (x.exclusive) cur = [x.v];
+          else {
+            cur = cur.filter((v) => !isExcl(v));
+            if (cur.length >= max) { toast(`เลือกได้สูงสุด ${max} ข้อ — กดข้อที่เลือกไว้เพื่อยกเลิกก่อน`, true); renderSection(rec, { keepScroll: true }); return; }
+            cur.push(x.v);
+          }
+          setRank(q, a, cur); touch(rec); renderSection(rec, { keepScroll: true });
+        },
+      });
+      const opt = h("label", { class: "opt" + (on ? " on" : "") + (x.exclusive ? " excl" : "") }, input,
+        h("span", { class: "code" }, on ? pos + 1 : "+"), h("span", { class: "lbl" }, x.label));
+      if (x.other && on) opt.append(optionText(q, a, x));
+      box.append(opt);
+    });
+    if (ranks.length) {
+      box.append(h("div", { class: "ranksum" }, "ลำดับที่เลือก: ", ranks.map((v, i) => `${i + 1}. ${q.o.find((o) => o.v === v).label}`).join("  ›  ")),
+        h("button", { type: "button", class: "clear", onclick: () => { setRank(q, a, []); touch(rec); renderSection(rec, { keepScroll: true }); } }, "ล้างคำตอบ"));
+    }
+    return box;
+  }
+
   function numberInput(q, a, key, opts = {}) {
     const inp = h("input", {
       type: "number", inputmode: opts.step && opts.step < 1 ? "decimal" : "numeric", step: opts.step || 1,
@@ -393,13 +454,15 @@
   function question(q, a, rec) {
     const head = h("div", { class: "qhead" }, q.no ? h("span", { class: "qno" }, q.no) : null,
       h("span", { class: "qt" }, q.t), q.req ? h("span", { class: "req", title: "จำเป็น" }, "*") : null,
-      q.type === "multi" ? h("span", { class: "tag" }, "ตอบได้หลายข้อ") : null);
+      q.type === "multi" ? h("span", { class: "tag" }, "ตอบได้หลายข้อ") : null,
+      q.type === "rank" ? h("span", { class: "tag" }, `เลือกสูงสุด ${q.max || 3} · เรียงอันดับ`) : null);
     const card = h("div", { class: "q" + (isAnswered(q, a) ? " done" : ""), id: `q-${q.id}` }, head);
     if (q.hint) card.append(h("div", { class: "hint" }, q.hint));
     let body;
     switch (q.type) {
       case "single": body = choice(q, a, rec, false); break;
       case "multi": body = choice(q, a, rec, true); break;
+      case "rank": body = rankChoice(q, a, rec); break;
       case "text":
         if (q.fixed) { a[q.id] = q.fixed; body = h("div", { class: "fixed" }, q.fixed); break; }
         body = h("input", {
@@ -459,8 +522,22 @@
           if (a[key] === 2) {
             const f = h("div", { class: "afields" });
             if (x.other) f.append(h("label", null, "ชนิด", h("input", { type: "text", value: a[`${q.id}_${x.key}_name`] || "", oninput: (e) => { a[`${q.id}_${x.key}_name`] = e.target.value; touchDebounced(); } })));
-            [["n", "จำนวน"], ["vacc", "รับวัคซีน"], ["deworm", "ถ่ายพยาธิ"]].forEach(([k, l]) =>
-              f.append(h("label", null, l, numberInput(q, a, `${q.id}_${x.key}_${k}`, { min: 0, max: 100000 }), "ตัว")));
+            const unkKey = (k) => `${q.id}_${x.key}_${k}_unk`;
+            const field = (k, l) => {
+              const unk = a[unkKey(k)] === 1;
+              const inp = numberInput(q, a, `${q.id}_${x.key}_${k}`, { min: 0, max: 100000, placeholder: unk ? "" : "0 = ไม่มี" });
+              if (unk) { inp.disabled = true; inp.value = ""; }
+              const cb = h("input", {
+                type: "checkbox", checked: unk,
+                onchange: (e) => {
+                  if (e.target.checked) { a[unkKey(k)] = 1; a[`${q.id}_${x.key}_${k}`] = null; } else delete a[unkKey(k)];
+                  touch(rec); renderSection(rec, { keepScroll: true });
+                },
+              });
+              return h("div", { class: "afield" }, h("label", null, l, inp, "ตัว"), h("label", { class: "unk" }, cb, "ไม่ทราบ"));
+            };
+            f.append(field("n", "จำนวน"));
+            if (a[unkKey("n")] !== 1) { f.append(field("vacc", "รับวัคซีน")); f.append(field("deworm", "ถ่ายพยาธิ")); }   // count unknown: nothing more to ask
             row.append(f);
           }
           return row;
@@ -864,6 +941,13 @@
         for (const q of allQuestions) {
           if (!visible(q, a) || isAnswered(q, a)) continue;
           if (q.type === "single") { const x = q.o[rnd(q.o.length) - 1]; a[q.id] = x.v; if (x.other) a[`${q.id}__${x.v}`] = "ข้อความทดสอบ"; }
+          else if (q.type === "rank") {
+            const n = 1 + Math.floor(Math.random() * (q.max || 3));
+            const pool = q.o.filter((x) => !x.exclusive).sort(() => Math.random() - 0.5).slice(0, n);
+            const list = (Math.random() < 0.1 && q.o.some((x) => x.exclusive) ? [q.o.find((x) => x.exclusive)] : pool).map((x) => x.v);
+            setRank(q, a, list);
+            list.map((v) => q.o.find((x) => x.v === v)).filter((x) => x.other).forEach((x) => (a[`${q.id}__${x.v}`] = "ระบุทดสอบ"));
+          }
           else if (q.type === "multi") {
             const pick = q.o.filter(() => Math.random() < 0.35);
             const ex = pick.find((x) => x.exclusive);
@@ -872,7 +956,7 @@
           } else if (q.type === "grid") q.rows.forEach((r) => (a[r.id] = rnd(q.scale.length)));
           else if (q.type === "number") a[q.id] = q.min != null ? q.min + rnd(Math.max(1, Math.min(60, (q.max || 100) - q.min))) : rnd(50);
           else if (q.type === "dob") { a.q1_2_day = rnd(28); a.q1_2_month = rnd(12); a.q1_2_year_be = 2480 + rnd(80); a.q1_2_age = computeAge(a); }
-          else if (q.type === "animals") q.animals.forEach((x) => { const k = `${q.id}_${x.key}`; a[`${k}_has`] = rnd(2); if (a[`${k}_has`] === 2) { a[`${k}_n`] = rnd(20); a[`${k}_vacc`] = rnd(5); a[`${k}_deworm`] = rnd(5); if (x.other) a[`${k}_name`] = "เป็ด"; } });
+          else if (q.type === "animals") q.animals.forEach((x) => { const k = `${q.id}_${x.key}`; a[`${k}_has`] = rnd(2); if (a[`${k}_has`] === 2) { a[`${k}_n`] = rnd(20); a[`${k}_vacc`] = rnd(5); a[`${k}_deworm`] = rnd(5); if (x.other) a[`${k}_name`] = "เป็ด"; if (Math.random() < 0.2) { a[`${k}_vacc_unk`] = 1; a[`${k}_vacc`] = null; } if (Math.random() < 0.1) { a[`${k}_n_unk`] = 1; a[`${k}_n`] = null; } } });
           else if (q.type === "text" || q.type === "textarea") a[q.id] = a[q.id] || "ทดสอบ";
           else if (q.type === "date") a[q.id] = todayIso();
         }
@@ -929,7 +1013,7 @@
       q3_5: [60, 33, 7], q3_6: [72, 23, 5], q3_7: [22, 78],
       q4_1_3: [30, 45, 25], q4_2_1: [12, 15, 30, 38, 5], q4_3: [38, 30, 18, 14],
       q5_1: [62, 25, 3, 7, 0.5, 2, 0.5], q5_2: [12, 48, 22, 8, 10], q5_3: [6, 72, 18, 0, 3, 1],
-      q6_1: [2, 33, 58, 7], q6_2: [70, 28, 2], q6_7: [62, 27, 8, 3],
+      q6_1: [2, 33, 58, 7], q6_2: [22, 10, 22, 8, 12, 8, 6, 3, 2, 3, 2, 1, 1], q5_2_2: [92, 8], q6_7: [62, 27, 8, 3],
       q7_1_1: [8, 35, 25, 32], q9_1: [8, 92], q9_2: [45, 55], q9_3: [40, 35, 25], q9_4: [15, 85], q9_4_1: [70, 20, 2, 7, 1],
       q10_1: [18, 6, 8, 40, 6, 22], q10_2: [20, 50, 30], q10_14: [55, 25, 12, 8],
       q11_1: [78, 22], q12_1_2: [2, 25, 18, 35, 18, 2], q12_1_4: [8, 62, 30], q12_1_5: [75, 22, 3], q12_2_2: [70, 25, 5], q12_3_1: [62, 38], q12_4_1: [58, 42],
@@ -940,7 +1024,7 @@
       q3_2: [0.25, 0.12, 0.03, 0.08, 0.15, 0.04, 0], q5_4: [0, 0.18, 0.12, 0.10, 0.30, 0.15, 0.03, 0.02],
       q6_3: [0, 0.35, 0.05, 0.12, 0.02], q6_4: [0.25, 0.30, 0.12, 0.20, 0.03, 0.10, 0, 0.02], q6_5: [0.30, 0.15, 0.40, 0.03],
       q6_6: [0.10, 0.18, 0.15, 0.06, 0.01, 0.04, 0.01], q7_1: [0, 0.24, 0.10, 0.08, 0.08, 0.30, 0.03, 0.01, 0.01, 0.005, 0.02],
-      q7_1_2: [0.15, 0.45, 0.45, 0.35, 0.15, 0.03],
+      q7_1_2: [0.15, 0.45, 0.45, 0.35, 0.15, 0.03], q5_2_1: [0, 0.30, 0.05, 0.03],
       q9_5: [0.55, 0.40, 0.08, 0.03], q10_15: [0, 0.45, 0.30, 0.12, 0.25, 0.10, 0.02], q11_3: [0.55, 0.30, 0.20, 0.02], q11_4: [0.55, 0.30, 0.10, 0.05],
       q11_5: [0, 0.03, 0.04, 0.12, 0.01, 0.02], q12_1_1: [0, 0.20, 0.62, 0.15, 0.30, 0.25, 0.02], q12_1_3: [0.45, 0.20, 0.40, 0.10, 0.02],
       q12_2_1: [0, 0.12, 0.18, 0.25, 0.06, 0.04, 0.02, 0.02], q12_3_1_1: [0.55, 0.65, 0.20, 0.85, 0.03], q12_3_1_2: [0, 0.25, 0.05, 0.12, 0.05],
@@ -976,16 +1060,26 @@
       const k = age < 40 ? 0.35 : age < 50 ? 0.7 : age < 60 ? 1 : age < 70 ? 1.35 : 1.6;
       const dis = [0.11 * k, 0.24 * k, 0.04 * k, 0.025 * k, 0.01, 0.035 * k, 0.012, 0.03, 0.15 * k, 0.02, 0.01, 0.02, 0.02, 0];
       a.q3_1 = dis.map((p, j) => (R() < p ? j + 1 : 0)).filter(Boolean);
-      if (!a.q3_1.length) a.q3_1 = [14];
+      if (!a.q3_1.length) a.q3_1 = [R() < 0.15 ? 15 : 14];   // 15 = never diagnosed
       const fam = [0.30, 0.35, 0.08, 0.10, 0.10, 0.05, 0.03, 0.03, 0.08, 0.02, 0.02, 0.05, 0.02, 0];
       a.q3_3 = fam.map((p, j) => (R() < p ? j + 1 : 0)).filter(Boolean);
       if (!a.q3_3.length) a.q3_3 = [14];
       a.q4_1 = male ? pickW([26, 9, 18, 47]) : pickW([2, 1, 2, 95]);
       a.q4_2 = male ? pickW([42, 58]) : pickW([84, 16]);
+      a.q10_alc = a.q4_2 === 1 ? 4 : pickW([15, 25, 60, 0]);   // 9.14 frequency agrees with 4.2
       for (let pass = 0; pass < 4; pass++) {
         for (const q of allQuestions) {
           if (!visible(q, a) || isAnswered(q, a)) continue;
-          if (q.type === "single") { const x = q.o[(W[q.id] && W[q.id].length === q.o.length ? pickW(W[q.id]) : pickW(q.o.map((o) => (o.other ? 0.3 : 1)))) - 1]; a[q.id] = x.v; if (x.other) a[`${q.id}__${x.v}`] = "ระบุ (จำลอง)"; }
+          if (q.type === "rank") {
+            const first = pickW(W[q.id] && W[q.id].length === q.o.length ? W[q.id] : q.o.map(() => 1));
+            const list = [first];
+            if (!q.o[first - 1].exclusive) {
+              const pool = q.o.filter((x) => !x.exclusive && x.v !== first).map((x) => x.v);
+              for (let k = 2; k <= (q.max || 3) && pool.length; k++) { if (R() < (k === 2 ? 0.7 : 0.45)) list.push(pool.splice(Math.floor(R() * pool.length), 1)[0]); else break; }
+            }
+            setRank(q, a, list);
+            list.map((v) => q.o[v - 1]).filter((x) => x.other).forEach((x) => (a[`${q.id}__${x.v}`] = "ระบุ (จำลอง)"));
+          } else if (q.type === "single") { const x = q.o[(W[q.id] && W[q.id].length === q.o.length ? pickW(W[q.id]) : pickW(q.o.map((o) => (o.other ? 0.3 : 1)))) - 1]; a[q.id] = x.v; if (x.other) a[`${q.id}__${x.v}`] = "ระบุ (จำลอง)"; }
           else if (q.type === "multi") {
             const ps = M[q.id] || q.o.map((x) => (x.exclusive ? 0 : 0.25));
             let pick = q.o.filter((x, j) => !x.exclusive && R() < (ps[j] || 0)).map((x) => x.v);
@@ -1001,11 +1095,14 @@
             const p = { cattle: 0.18, poultry: 0.55, dog: 0.55, cat: 0.30, pig: 0.06, other: 0.04 }[x.key];
             const has = R() < p ? 2 : 1, kx = `${q.id}_${x.key}`;
             a[`${kx}_has`] = has;
-            if (has === 2) { const nn = x.key === "poultry" ? 5 + Math.floor(R() * 25) : 1 + Math.floor(R() * 4); a[`${kx}_n`] = nn; a[`${kx}_vacc`] = Math.round(nn * (x.key === "dog" || x.key === "cat" ? 0.7 : 0.3)); a[`${kx}_deworm`] = Math.round(nn * 0.3); if (x.other) a[`${kx}_name`] = "เป็ด"; }
+            if (has === 2) { const nn = x.key === "poultry" ? 5 + Math.floor(R() * 25) : 1 + Math.floor(R() * 4); a[`${kx}_n`] = nn; a[`${kx}_vacc`] = Math.round(nn * (x.key === "dog" || x.key === "cat" ? 0.7 : 0.3)); a[`${kx}_deworm`] = Math.round(nn * 0.3); if (x.other) a[`${kx}_name`] = "เป็ด";
+              if (R() < 0.08) { a[`${kx}_n_unk`] = 1; delete a[`${kx}_n`]; }
+              else { if (R() < 0.15) { a[`${kx}_vacc_unk`] = 1; delete a[`${kx}_vacc`]; } if (R() < 0.10) { a[`${kx}_deworm_unk`] = 1; delete a[`${kx}_deworm`]; } } }
           });
           else if (q.type === "text" && !a[q.id]) a[q.id] = q.id === "q3_4_1" ? `${1 + Math.floor(R() * 15)} ปี` : q.id === "q3_3_relation" ? ["พ่อ", "แม่", "พี่น้อง", "พ่อและแม่"][Math.floor(R() * 4)] : "";
         }
       }
+      if (a.q5_2 === 1) { a.q5_2_1 = [1]; a.q5_2_2 = 1; }   // never treated in a year: no doctor visit, no admission
       const t0 = Date.now() - R() * 3 * 86400e3;
       const rec = { uuid: uuid(), created_at: nowIso(), updated_at: nowIso(), status: "ready", answers: a,
         started_at: new Date(t0).toISOString(), finished_at: new Date(t0 + clamp(norm(35, 12), 6, 90) * 60000).toISOString() };
