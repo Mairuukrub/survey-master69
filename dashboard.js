@@ -237,11 +237,11 @@
     });
     const housesCovered = Object.keys(houses).length + noKeyRows;
     const multiHouses = Object.values(houses).filter((g) => g.length > 1);
-    const samePerson = [];   // same house + same sex + same full birth date
+    const samePerson = [];   // same house + same sex + same full birth date (rows whose age/birth date is marked as an estimate are left out)
     multiHouses.forEach((g) => {
       const by = {};
       g.forEach((r) => {
-        if (!String(r.q1_1 ?? "").trim() || !String(r.q1_2_day ?? "").trim() || !String(r.q1_2_month ?? "").trim() || !String(r.q1_2_year_be ?? "").trim()) return;
+        if (String(r.q1_2_est ?? "") === "1" || !String(r.q1_1 ?? "").trim() || !String(r.q1_2_day ?? "").trim() || !String(r.q1_2_month ?? "").trim() || !String(r.q1_2_year_be ?? "").trim()) return;
         const k = `${r.q1_1}|${r.q1_2_year_be}-${r.q1_2_month}-${r.q1_2_day}`; (by[k] = by[k] || []).push(r);
       });
       Object.values(by).forEach((x) => { if (x.length > 1) samePerson.push(x); });

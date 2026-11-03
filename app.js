@@ -114,7 +114,7 @@
           });
           break;
         case "grid": q.rows.forEach((r) => { if (a[r.id] != null) row[r.id] = a[r.id]; }); break;
-        case "dob": ["q1_2_day", "q1_2_month", "q1_2_year_be", "q1_2_age"].forEach((k) => { if (a[k] != null && a[k] !== "") row[k] = a[k]; }); break;
+        case "dob": ["q1_2_day", "q1_2_month", "q1_2_year_be", "q1_2_age"].forEach((k) => { if (a[k] != null && a[k] !== "") row[k] = a[k]; }); row.q1_2_est = a.q1_2_est === 1 ? 1 : 0; break;
         case "computed": if (q.compute === "bmi") { const b = computeBmi(a); if (b != null) row[q.id] = b; } break;
         case "animals":
           q.animals.forEach((x) => {
@@ -186,7 +186,7 @@
   // Only "same house + same sex + same full birth date" suggests the same person was interviewed twice.
   const personKey = (a) => {
     const hk = houseKey(a);
-    if (!hk || !filled(a.q1_1) || !filled(a.q1_2_day) || !filled(a.q1_2_month) || !filled(a.q1_2_year_be)) return "";
+    if (!hk || a.q1_2_est === 1 || !filled(a.q1_1) || !filled(a.q1_2_day) || !filled(a.q1_2_month) || !filled(a.q1_2_year_be)) return "";
     return `${hk}|${a.q1_1}|${a.q1_2_year_be}-${a.q1_2_month}-${a.q1_2_day}`;
   };
   // other records of the same house on this device (any status): used for an informational note only
@@ -431,7 +431,9 @@
         const year = numberInput(q, a, "q1_2_year_be", { min: 2420, max: 2570, placeholder: "ปี พ.ศ.", after: refreshAge });
         const age = numberInput(q, a, "q1_2_age", { min: 0, max: 120, placeholder: "อายุ" });
         age.id = "age-input";
-        body = h("div", { class: "dob" }, h("div", { class: "row3" }, day, month, year), h("div", { class: "num" }, h("span", { class: "unit" }, "อายุ"), age, h("span", { class: "unit" }, "ปี"), ageBox));
+        // when the age or birth date is only a guess, the interviewer says so: it is recorded, and an estimated birth date never counts as a "same person" match
+        const est = h("label", { class: "est" }, h("input", { type: "checkbox", checked: a.q1_2_est === 1, onchange: (e) => { if (e.target.checked) a.q1_2_est = 1; else delete a.q1_2_est; touch(rec); refreshChecks(rec); } }), "อายุ/วันเกิดเป็นค่าประมาณ (ผู้ตอบไม่แน่ใจ)");
+        body = h("div", { class: "dob" }, h("div", { class: "row3" }, day, month, year), h("div", { class: "num" }, h("span", { class: "unit" }, "อายุ"), age, h("span", { class: "unit" }, "ปี"), ageBox), est);
         setTimeout(refreshAge);
         break;
       }

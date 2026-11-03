@@ -79,7 +79,7 @@
           break;
         case "grid": q.rows.forEach((r) => add(r.id, "num", { codes: lab(q.scale), miss: byVis(q) })); break;
         case "number": case "computed": add(q.id, "num", { miss: byVis(q) }); break;
-        case "dob": ["q1_2_day", "q1_2_month", "q1_2_year_be", "q1_2_age"].forEach((k) => add(k, "num", { miss: byVis(q) })); break;
+        case "dob": ["q1_2_day", "q1_2_month", "q1_2_year_be", "q1_2_age"].forEach((k) => add(k, "num", { miss: byVis(q) })); add("q1_2_est", "num", { codes: [[1, "ประมาณ"], [0, "ไม่ใช่"]], miss: byVis(q) }); break;
         case "animals":
           q.animals.forEach((x) => {
             const has = `${q.id}_${x.key}_has`;

@@ -74,6 +74,7 @@
         case "dob":
           [["q1_2_day", "วันเกิด"], ["q1_2_month", "เดือนเกิด (1-12)"], ["q1_2_year_be", "ปีเกิด (พ.ศ.)"], ["q1_2_age", "อายุ (ปี)"]]
             .forEach(([key, label]) => cols.push({ key, label: `2 ${label}`, q: "2", codes: "" }));
+          cols.push({ key: "q1_2_est", label: "2 อายุ/วันเกิดเป็นค่าประมาณ", q: "2", codes: "1=ประมาณ; 0=ไม่ใช่" });
           break;
         case "animals":
           q.animals.forEach((x) => {
