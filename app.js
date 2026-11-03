@@ -1282,6 +1282,7 @@
         } }, "ตรวจหาแอปเวอร์ชันใหม่")),
         h("h2", null, "การแสดงผล"),
         displayControls(),
+        clearLocalSection(),
         h("h2", null, "ความปลอดภัยของข้อมูลในเครื่องนี้"),
         deviceStatus(),
         h("p", null, h("a", { href: "#/help" }, "อ่านวิธีใช้และข้อควรระวัง")),
@@ -1290,6 +1291,38 @@
     const p = new URLSearchParams((location.hash.split("?")[1] || ""));
     if (p.get("api")) { url.value = p.get("api"); }
     updateNet();
+  }
+
+  // ------------------------------------------------------------ clear what is stored on this device (e.g. after testing)
+  // Sent interviews cannot be deleted one by one on the list (they can still be edited and re-sent), so this is the way to clear
+  // test data from a phone. The data in the Google Sheet is never touched. Two taps each: the first arms the button.
+  function armedBtn(label, armedLabel, onConfirm, cls = "btn", disabled = false) {
+    let armed = false, timer = null;
+    const b = h("button", {
+      class: cls, type: "button", disabled,
+      onclick: () => {
+        if (!armed) { armed = true; b.textContent = armedLabel; timer = setTimeout(() => { armed = false; b.textContent = label; }, 6000); return; }
+        clearTimeout(timer); armed = false; b.textContent = label; onConfirm();
+      },
+    }, label);
+    return b;
+  }
+  function clearLocalSection() {
+    const list = Object.values(records), sent = list.filter((r) => r.status === "sent"), unsent = list.filter((r) => r.status !== "sent");
+    return h("div", null,
+      h("h2", null, "ล้างข้อมูลในเครื่องนี้"),
+      h("p", { class: "fine" }, `ในเครื่องนี้มี ${list.length} ชุด: ส่งแล้ว ${sent.length} · ฉบับร่าง/รอส่ง ${unsent.length} · การล้างลบเฉพาะสำเนาในเครื่องนี้ ข้อมูลที่ส่งเข้า Google Sheets แล้วไม่ถูกลบ แต่เปิดแก้จากเครื่องนี้ไม่ได้อีก`),
+      h("div", { class: "pager" },
+        armedBtn("ล้างชุดที่ส่งแล้ว", `ยืนยันล้าง ${sent.length} ชุดที่ส่งแล้ว? (กดอีกครั้ง)`, () => {
+          Object.values(records).filter((r) => r.status === "sent").forEach((r) => delete records[r.uuid]);
+          saveRecords(); toast(`ล้างชุดที่ส่งแล้ว ${sent.length} ชุดออกจากเครื่องนี้แล้ว`); render();
+        }, "btn", !sent.length),
+        armedBtn("ล้างทั้งหมด", `ยืนยันลบทั้งหมด ${list.length} ชุด รวมที่ยังไม่ส่ง ${unsent.length} ชุด? (กดอีกครั้ง)`, () => {
+          const n = Object.keys(records).length;
+          Object.keys(records).forEach((k) => delete records[k]);
+          saveRecords(); toast(`ล้างข้อมูลในเครื่องนี้ ${n} ชุดแล้ว`); render();
+        }, "btn danger", !list.length)),
+      unsent.length ? h("p", { class: "fine" }, "⚠ มีชุดที่ยังไม่ส่ง: ส่งให้เสร็จก่อน หรือกด “ดาวน์โหลดสำรอง (CSV)” ที่หน้ารายการก่อนล้างทั้งหมด (ชุดที่ยังไม่ส่งถ้าล้างแล้วจะหายถาวร)") : null);
   }
 
   function displayControls() {
