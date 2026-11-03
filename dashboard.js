@@ -224,6 +224,13 @@
       x.pct.push(num(r.complete_pct) || 0);
       if (num(r.duration_min) != null) x.min.push(num(r.duration_min));
     });
+    // latest app build each interviewer sent with: shows who may still run an older version
+    const ivBuild = {};
+    R.forEach((r) => {
+      const k = [r.iv_first, r.iv_last].filter(Boolean).join(" ") || "ไม่ระบุ", t = r.submitted_at || "";
+      if (!ivBuild[k] || t > ivBuild[k].t) ivBuild[k] = { t, build: r.app_build || "", form: r.form_version || "" };
+    });
+    const newestSent = Object.values(ivBuild).reduce((m, x) => (x.t > m.t ? x : m), { t: "", build: "" });
     const median = (v) => { if (!v.length) return null; const s = [...v].sort((p, q) => p - q), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
     const SHORT_MIN = 10;   // a full interview in under 10 minutes deserves a second look
     // several people per house are expected (the unit is the person); group rows by house to count coverage
@@ -337,6 +344,10 @@
             return h("tr", null, h("td", null, k), h("td", { class: "n" }, v.pct.length), h("td", { class: "n" }, `${(v.pct.reduce((a, b) => a + b, 0) / v.pct.length).toFixed(0)}%`),
               h("td", { class: "n" }, md == null ? "–" : `${Math.round(md)} นาที`), h("td", { class: "n" + (short ? " flag" : "") }, v.min.length ? short : "–"));
           })))),
+        card("เวอร์ชันแอปที่ใช้ส่งข้อมูล", "เวอร์ชันของการส่งล่าสุดของแต่ละคน · แถวที่ติด “เก่ากว่า” คือยังส่งด้วยเวอร์ชันที่ไม่ใช่ล่าสุดที่มีคนส่ง อาจยังไม่ได้อัปเดต (ข้อมูลก่อนมีเลขเวอร์ชันจะว่าง)",
+          Object.keys(ivBuild).length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", null, "แอป"), h("th", null, "ฟอร์ม"), h("th", null, "ส่งล่าสุด"))),
+            h("tbody", null, Object.entries(ivBuild).sort((a, b) => b[1].t.localeCompare(a[1].t)).map(([k, v]) => h("tr", null, h("td", null, k),
+              h("td", { class: v.build !== newestSent.build ? "flag" : "" }, `${v.build || "–"}${v.build !== newestSent.build ? " · เก่ากว่า" : ""}`), h("td", null, v.form || "–"), h("td", null, v.t.slice(0, 16).replace("T", " ")))))) : h("p", { class: "empty-c" }, "ยังไม่มีข้อมูล")),
         card("อาจเป็นคนเดียวกันที่ถูกสัมภาษณ์ซ้ำ", "บ้านเลขที่ เพศ และวันเกิดตรงกันมากกว่า 1 แถว — ถ้าเป็นคนเดียวกัน ควรเก็บแถวที่ครบกว่าแล้วลบอีกแถวใน Sheet",
           samePerson.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "หมู่ / บ้านเลขที่"), h("th", { class: "n" }, "แถว"), h("th", null, "ผู้สัมภาษณ์ · วันที่"))),
             h("tbody", null, samePerson.map((g) => h("tr", null, h("td", null, `หมู่ ${g[0].h_moo} · ${g[0].h_house_no}`), h("td", { class: "n flag" }, g.length),

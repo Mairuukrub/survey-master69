@@ -62,7 +62,7 @@
     const cols = [];
     const add = (key, kind, extra = {}) => { const c = labels.get(key) || {}; cols.push({ key, kind, label: c.label || key, q: c.q || "", source: "question", ...extra }); };
     const byVis = (q) => (ctx) => (ctx.vis(q) ? MISS.na : MISS.skip);
-    ["uuid", "record_id", "form_version", "created_at", "updated_at", "submitted_at", "complete_pct", "started_at", "finished_at", "duration_min"]
+    ["uuid", "record_id", "form_version", "app_build", "created_at", "updated_at", "submitted_at", "complete_pct", "started_at", "finished_at", "duration_min"]
       .forEach((k) => add(k, META_NUM.has(k) ? "num" : "str", { source: "meta" }));
     for (const q of M69.questions(form)) {
       const lab = (o) => o.map((x) => [x.v, x.label]);
