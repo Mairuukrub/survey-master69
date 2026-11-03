@@ -169,6 +169,13 @@
     if (!q) return null;
     const t = title || [q.no, q.t].filter(Boolean).join(" ");
     if (q.type === "single") { const x = single(rows, id); return card(t, sub || `${x.d} คนที่ตอบ`, x.d ? bars(x.items, x.d, { sort: false }) : h("p", { class: "empty-c" }, "ยังไม่มีคำตอบ"), wide); }
+    if (q.type === "rank") {
+      const x = single(rows, id), max = q.max || 3, keys = [id].concat(Array.from({ length: max - 1 }, (_, i) => `${id}_r${i + 2}`));
+      const top = q.o.map((o) => ({ label: o.label, n: rows.filter((r) => keys.some((k) => Number(r[k]) === o.v)).length }));
+      return card(t, sub || `${x.d} คนที่ตอบ · เลือกสูงสุด ${max} อันดับ`, x.d ? h("div", null,
+        h("p", { class: "fine" }, "เลือกเป็นอันดับ 1"), bars(x.items, x.d),
+        h("p", { class: "fine" }, `ติด ${max} อันดับแรก`), bars(top, x.d, { s2: true })) : h("p", { class: "empty-c" }, "ยังไม่มีคำตอบ"), wide);
+    }
     if (q.type === "multi") {
       const x = multi(rows, id, { dropNone: true }), none = q.o.find((o) => o.exclusive);
       const nNone = none ? rows.filter((r) => String(r[`${id}_o${none.v}`]) === "1").length : 0;
@@ -214,7 +221,8 @@
     const answered = (id) => (r) => r[id] !== "" && r[id] != null;
     // KPI definitions live in analysis.js (M69A.DERIVED) so the exported data gives the same numbers
     const has = (k) => R.filter((r) => r[k] !== "" && r[k] != null), is1 = (k) => R.filter((r) => r[k] === 1);
-    const disAns = has("ncd_any"), chronic = is1("ncd_any");
+    const disAns = has("ncd_any"), chronic = is1("ncd_any");   // base = people who were diagnosed at least once (never-diagnosed are reported apart)
+    const ndxAns = has("never_dx"), ndx = is1("never_dx");
     const smokeAns = has("smoke_cur"), smokers = is1("smoke_cur");
     const bmiAns = has("bmi_cat"), obese = is1("obese");
     const dm = R.filter(hasOpt("q3_1", 1)), ht = R.filter(hasOpt("q3_1", 2));
@@ -276,7 +284,12 @@
     R.forEach((r) => (dates[r.iv_date] = (dates[r.iv_date] || 0) + 1));
     const animals = [["cattle", "โค/กระบือ"], ["poultry", "สัตว์ปีก"], ["dog", "สุนัข"], ["cat", "แมว"], ["pig", "สุกร"]];
     const petHh = R.filter(yes("q11_1", 1));
-    const animalSum = (key, f) => petHh.reduce((s, r) => s + (num(r[`q11_2_${key}_${f}`]) || 0), 0);
+    const animalCov = (key, f) => petHh.reduce((s, r) => {
+      const k = `q11_2_${key}`;
+      if (String(r[`${k}_has`]) !== "2" || String(r[`${k}_n_unk`]) === "1" || String(r[`${k}_${f}_unk`]) === "1") return s;   // "ไม่ทราบ": left out of numerator and denominator
+      return { n: s.n + (num(r[`${k}_${f}`]) || 0), d: s.d + (num(r[`${k}_n`]) || 0) };
+    }, { n: 0, d: 0 });
+    const animalUnk = petHh.filter((r) => animals.some(([k]) => ["n", "vacc"].some((f) => String(r[`q11_2_${k}_${f}_unk`]) === "1"))).length;
     const util = gridShare(R, "q13_utils", [1]).concat(gridShare(R, "q13_3", [1]).map((x) => ({ ...x, label: x.label }))) ;
 
     return h("div", null,
@@ -285,15 +298,16 @@
         kpi(housesCovered.toLocaleString("th-TH"), "บ้านที่ครอบคลุม", `จาก ${HOUSES_TOTAL} หลัง · ${fmtPct(housesCovered, HOUSES_TOTAL)}`),
         kpi(age.length ? (age.reduce((a, b) => a + b, 0) / age.length).toFixed(1) : "–", "อายุเฉลี่ยผู้ให้ข้อมูล (ปี)"),
         kpi(fmtPct(age.filter((a) => a >= 60).length, age.length), "อายุ 60 ปีขึ้นไป"),
-        kpi(fmtPct(chronic.length, disAns.length), "มีโรคประจำตัว", `${chronic.length}/${disAns.length} คน`),
+        kpi(fmtPct(chronic.length, disAns.length), "มีโรคประจำตัว", `${chronic.length}/${disAns.length} คน · ไม่นับผู้ที่ไม่เคยได้รับการวินิจฉัย`),
+        kpi(fmtPct(ndx.length, ndxAns.length), "ไม่เคยได้รับการวินิจฉัยโรค", `${ndx.length}/${ndxAns.length} คน · รายงานแยก`),
         kpi(fmtPct(obese.length, bmiAns.length), "BMI ≥ 25 (อ้วน)", `${obese.length}/${bmiAns.length} คน`),
         kpi(fmtPct(smokers.length, smokeAns.length), "สูบบุหรี่ปัจจุบัน", `${smokers.length}/${smokeAns.length} คน`),
         kpi(fmtPct(painAny.length, pain.d), "ปวดกล้ามเนื้อใน 3 เดือน", `${painAny.length}/${pain.d} คน`)),
 
       section("ข้อมูลทั่วไป",
         card("อายุและเพศของผู้ให้ข้อมูล", `${age.length} คน`, pyramid(R)),
-        card("อาชีพ", null, bars(single(R, "q2_1").items, single(R, "q2_1").d)),
-        card("รายได้รวมเฉลี่ยของท่านต่อเดือน", null, bars(single(R, "q1_8").items, single(R, "q1_8").d, { sort: false })),
+        card("อาชีพหลัก (อันดับ 1)", null, bars(single(R, "q2_1").items, single(R, "q2_1").d)),
+        card("รายได้รวมของครอบครัวต่อเดือน", null, bars(single(R, "q1_8").items, single(R, "q1_8").d, { sort: false })),
         card("ระดับการศึกษา", null, bars(single(R, "q1_7").items.filter((x) => x.n), single(R, "q1_7").d, { sort: false }))),
 
       section("สุขภาพร่างกาย",
@@ -315,9 +329,10 @@
       section("ปัจจัยเสี่ยงต่อโรคไม่ติดต่อ",
         card("พฤติกรรมเสี่ยง แยกเพศ", "ร้อยละของผู้ตอบในแต่ละเพศ", bySex(R, [
           ["สูบบุหรี่ปัจจุบัน", (r) => ["1", "2"].includes(String(r.q4_1)), answered("q4_1")],
-          ["ดื่มเครื่องดื่มแอลกอฮอล์", yes("q4_2", 2), answered("q4_2")],
+          ["ดื่มเครื่องดื่มแอลกอฮอล์ (ใน 12 เดือนที่ผ่านมา)", yes("q4_2", 2), answered("q4_2")],
           ["ไม่ออกกำลังกายเลย", yes("q4_3", 1), answered("q4_3")],
-          ["ชอบรสเค็ม", yes("q10_1", 1), answered("q10_1")],
+          ["ชอบรสเค็มเป็นอันดับ 1", yes("q10_1", 1), answered("q10_1")],
+          ["รสเค็มติด 3 อันดับแรก", (r) => [r.q10_1, r.q10_1_r2, r.q10_1_r3].some((v) => String(v) === "1"), answered("q10_1")],
           ["เติมเครื่องปรุงทุกมื้อ", yes("q10_2", 1), answered("q10_2")],
           ["BMI ≥ 25", (r) => r.obese === 1, (r) => r.obese !== "" && r.obese != null],
         ]), true),
@@ -340,7 +355,7 @@
 
       section("สัตว์เลี้ยงและโรคจากสัตว์",
         card("ครัวเรือนที่เลี้ยงสัตว์แต่ละชนิด", `เลี้ยงสัตว์ ${petHh.length}/${R.filter(answered("q11_1")).length} ครัวเรือน`, bars(animals.map(([k, l]) => ({ label: l, n: petHh.filter((r) => String(r[`q11_2_${k}_has`]) === "2").length })), petHh.length)),
-        card("สุนัขและแมวที่ได้รับวัคซีน", "จำนวนตัวที่ได้รับวัคซีน ÷ จำนวนตัวทั้งหมด", bars([["dog", "สุนัข"], ["cat", "แมว"]].map(([k, l]) => ({ label: l, n: animalSum(k, "vacc"), d: animalSum(k, "n") })), 0, { sort: false }))),
+        card("สุนัขและแมวที่ได้รับวัคซีน", `จำนวนตัวที่ได้รับวัคซีน ÷ จำนวนตัวทั้งหมด · ไม่นับสัตว์ที่ตอบไม่ทราบ (${animalUnk} ครัวเรือนตอบไม่ทราบอย่างน้อย 1 ช่อง)`, bars([["dog", "สุนัข"], ["cat", "แมว"]].map(([k, l]) => ({ label: l, ...animalCov(k, "vacc") })), 0, { sort: false }))),
 
       section("สิ่งแวดล้อม",
         card("วิธีจัดการขยะของครัวเรือน", "ตอบได้หลายข้อ", bars(multi(R, "q12_1_1").items, multi(R, "q12_1_1").d)),

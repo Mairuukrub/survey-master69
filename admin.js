@@ -121,7 +121,7 @@
 
   // ------------------------------------------------------------ helpers over the form
   const TYPE_LABEL = {
-    single: "เลือกข้อเดียว", multi: "เลือกได้หลายข้อ", grid: "ตาราง (หลายข้อย่อย ใช้ระดับคำตอบเดียวกัน)", number: "ตัวเลข", text: "ข้อความสั้น",
+    single: "เลือกข้อเดียว", multi: "เลือกได้หลายข้อ", rank: "เลือกและเรียงอันดับ (พิเศษ)", grid: "ตาราง (หลายข้อย่อย ใช้ระดับคำตอบเดียวกัน)", number: "ตัวเลข", text: "ข้อความสั้น",
     textarea: "ข้อความยาว", date: "วันที่", dob: "วันเกิด/อายุ (พิเศษ)", animals: "สัตว์เลี้ยง (พิเศษ)", computed: "คำนวณอัตโนมัติ (พิเศษ)",
   };
   const EDITABLE_TYPES = ["single", "multi", "grid", "number", "text", "textarea", "date"];
@@ -162,7 +162,7 @@
     const out = [];
     form.sections.forEach((s) => s.q.forEach((q) => {
       const label = `${q.no ? q.no + " " : ""}${short(q.t, 50)}`;
-      if (q.type === "single") out.push({ id: q.id, label, kind: "single", o: q.o });
+      if (q.type === "single" || q.type === "rank") out.push({ id: q.id, label: q.type === "rank" ? `${label} (อันดับ 1)` : label, kind: "single", o: q.o });
       else if (q.type === "multi") out.push({ id: q.id, label, kind: "multi", o: q.o });
       else if (q.type === "number") out.push({ id: q.id, label, kind: "number" });
       else if (q.type === "grid") q.rows.forEach((r) => out.push({ id: r.id, label: `${r.no ? r.no + " " : ""}${short(r.t, 50)}`, kind: "single", o: q.scale }));
@@ -405,7 +405,7 @@
         field("ชนิดคำถาม", typeSel),
         field("คำแนะนำผู้สัมภาษณ์ (แสดงใต้คำถาม)", h("input", { type: "text", value: q.hint || "", oninput: setProp("hint") }))),
       h("label", { class: "chk" }, h("input", { type: "checkbox", checked: !!q.req, onchange: (e) => { if (e.target.checked) q.req = true; else delete q.req; changed(); } }), "จำเป็นต้องตอบ (ส่งไม่ได้ถ้าไม่ตอบ)"),
-      q.type === "single" || q.type === "multi" ? optionEditor(q, q.o, { multi: q.type === "multi", flags: true }) : null,
+      q.type === "single" || q.type === "multi" || q.type === "rank" ? optionEditor(q, q.o, { multi: q.type !== "single", flags: true }) : null,
       q.type === "grid" ? [h("p", { class: "sub" }, "ระดับคำตอบ (ใช้กับทุกข้อย่อย)"), optionEditor(q, q.scale, { flags: false }), gridRowsEditor(q)] : null,
       q.type === "number" ? h("div", { class: "g4" },
         field("หน่วย", h("input", { type: "text", value: q.unit || "", oninput: setProp("unit") })),

@@ -62,6 +62,12 @@
           cols.push({ key: q.id, label: qn, q: q.no || "", codes: codes(q.o) });
           q.o.filter((x) => x.other).forEach((x) => cols.push({ key: `${q.id}_o${x.v}_text`, label: `${qn} — ระบุ (${x.label})`, q: q.no || "", codes: "" }));
           break;
+        case "rank": {   // pick up to q.max (default 3) in order: the plain column holds rank 1, so rules and charts that read it keep working
+          cols.push({ key: q.id, label: `${qn} — อันดับ 1`, q: q.no || "", codes: codes(q.o) });
+          for (let k = 2; k <= (q.max || 3); k++) cols.push({ key: `${q.id}_r${k}`, label: `${qn} — อันดับ ${k}`, q: q.no || "", codes: codes(q.o) });
+          q.o.filter((x) => x.other).forEach((x) => cols.push({ key: `${q.id}_o${x.v}_text`, label: `${qn} — ระบุ (${x.label})`, q: q.no || "", codes: "" }));
+          break;
+        }
         case "multi":
           q.o.forEach((x) => {
             cols.push({ key: `${q.id}_o${x.v}`, label: `${qn} — ${x.label}`, q: q.no || "", codes: "1=เลือก; 0=ไม่เลือก" });
@@ -81,7 +87,10 @@
             cols.push({ key: `${q.id}_${x.key}_has`, label: `${qn} — ${x.t}`, q: q.no, codes: "1=ไม่มี; 2=มี" });
             if (x.other) cols.push({ key: `${q.id}_${x.key}_name`, label: `${qn} — ${x.t} (ชนิด)`, q: q.no, codes: "" });
             [["n", "จำนวน (ตัว)"], ["vacc", "รับวัคซีน (ตัว)"], ["deworm", "รับยาถ่ายพยาธิ (ตัว)"]]
-              .forEach(([k, l]) => cols.push({ key: `${q.id}_${x.key}_${k}`, label: `${qn} — ${x.t} ${l}`, q: q.no, codes: "" }));
+              .forEach(([k, l]) => {
+                cols.push({ key: `${q.id}_${x.key}_${k}`, label: `${qn} — ${x.t} ${l}`, q: q.no, codes: "" });
+                cols.push({ key: `${q.id}_${x.key}_${k}_unk`, label: `${qn} — ${x.t} ${l}: ไม่ทราบ`, q: q.no, codes: "1=ไม่ทราบ; 0=ทราบ" });
+              });
           });
           break;
         default:
@@ -92,7 +101,7 @@
   }
 
   // ---------------------------------------------------------------- validation (admin publish + safety net when loading a remote form)
-  const TYPES = ["single", "multi", "grid", "number", "text", "textarea", "date", "dob", "animals", "computed"];
+  const TYPES = ["single", "multi", "rank", "grid", "number", "text", "textarea", "date", "dob", "animals", "computed"];
   const ID_RE = /^[a-z][a-z0-9_]*$/;
   function validateForm(form) {
     const err = [];
@@ -111,7 +120,7 @@
         if (!ID_RE.test(q.id || "")) err.push(`${w}: รหัสข้อ “${q.id || ""}” ต้องเป็น a-z 0-9 _ และขึ้นต้นด้วยตัวอักษร`);
         if (!TYPES.includes(q.type)) err.push(`${w}: ชนิดคำถาม “${q.type}” ไม่รู้จัก`);
         if (!String(q.t || "").trim()) err.push(`${w}: ไม่มีข้อความคำถาม`);
-        if (q.type === "single" || q.type === "multi") {
+        if (q.type === "single" || q.type === "multi" || q.type === "rank") {
           if (!Array.isArray(q.o) || q.o.length < 1) err.push(`${w}: ต้องมีตัวเลือกอย่างน้อย 1 ข้อ`);
           else {
             const vs = q.o.map((x) => x.v);
@@ -129,6 +138,7 @@
             byId.set(r.id, { ...r, type: "single", o: q.scale, section: s.id, gridRow: true });
           });
         }
+        if (q.type === "rank" && (!Number.isInteger(q.max) || q.max < 2 || q.max > 6)) err.push(`${w}: ข้อเรียงอันดับต้องกำหนดจำนวนอันดับ 2–6`);
         if (q.type === "number" && q.min != null && q.max != null && Number(q.min) > Number(q.max)) err.push(`${w}: ค่าต่ำสุดมากกว่าค่าสูงสุด`);
         if (q.id) byId.set(q.id, { ...q, section: s.id });
       });

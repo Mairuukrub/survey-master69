@@ -10,6 +10,8 @@
   const num = (v) => { if (blank(v)) return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
   const findQ = (form, id) => M69.questions(form).find((q) => q.id === id);
   const noneCode = (form, id) => { const q = findQ(form, id); const o = q && q.o && q.o.find((x) => x.exclusive); return o ? o.v : null; };
+  const exclusiveCodes = (form, id) => { const q = findQ(form, id); return q && q.o ? q.o.filter((x) => x.exclusive).map((x) => x.v) : []; };
+  const NEVER_DIAGNOSED = 15;   // option of 3.1 "ไม่เคยได้รับการวินิจฉัย"
   // multi question: null if not answered, else the ticked codes
   const ticked = (row, form, id) => {
     const q = findQ(form, id);
@@ -32,19 +34,21 @@
       fn: (r) => { const b = validBmi(r); return b == null ? "" : BMI_CATS.findIndex(([hi]) => b < hi) + 1; } },
     { key: "obese", label: "BMI ≥ 25 (อ้วน)", codes: YES_NO, def: "bmi >= 25 (ใช้เฉพาะค่า 10–70)",
       fn: (r) => { const b = validBmi(r); return b == null ? "" : yn(b >= 25); } },
-    { key: "ncd_any", label: "มีโรคประจำตัวอย่างน้อย 1 โรค", codes: YES_NO, def: "ข้อ 3.1 ตอบแล้ว และไม่ได้เลือก “ไม่มีโรคประจำตัว”",
-      fn: (r, f) => { const t = ticked(r, f, "q3_1"); return t == null ? "" : yn(!t.includes(noneCode(f, "q3_1"))); } },
-    { key: "ncd_n", label: "จำนวนโรคประจำตัวที่เลือก", codes: null, def: "จำนวนตัวเลือกในข้อ 3.1 ที่เลือก ไม่นับ “ไม่มีโรคประจำตัว”",
-      fn: (r, f) => { const t = ticked(r, f, "q3_1"); return t == null ? "" : t.filter((v) => v !== noneCode(f, "q3_1")).length; } },
+    { key: "ncd_any", label: "มีโรคประจำตัวอย่างน้อย 1 โรค", codes: YES_NO, def: "ข้อ 3.1 เลือกโรคอย่างน้อย 1 โรค = ใช่ · เลือก “ได้รับการวินิจฉัยแล้ว แต่ไม่มีโรคประจำตัว” = ไม่ใช่ · “ไม่เคยได้รับการวินิจฉัย” = ว่าง (ไม่นับในฐาน ดู never_dx)",
+      fn: (r, f) => { const t = ticked(r, f, "q3_1"); if (t == null || t.includes(NEVER_DIAGNOSED)) return ""; return yn(!t.some((v) => exclusiveCodes(f, "q3_1").includes(v))); } },
+    { key: "never_dx", label: "ไม่เคยได้รับการวินิจฉัยโรค", codes: YES_NO, def: "ข้อ 3.1 เลือก “ไม่เคยได้รับการวินิจฉัย” (รายงานแยกจากร้อยละของผู้มีโรคประจำตัว)",
+      fn: (r, f) => { const t = ticked(r, f, "q3_1"); return t == null ? "" : yn(t.includes(NEVER_DIAGNOSED)); } },
+    { key: "ncd_n", label: "จำนวนโรคประจำตัวที่เลือก", codes: null, def: "จำนวนตัวเลือกในข้อ 3.1 ที่เลือก ไม่นับ “ได้รับการวินิจฉัยแล้ว แต่ไม่มีโรคประจำตัว” และ “ไม่เคยได้รับการวินิจฉัย”",
+      fn: (r, f) => { const t = ticked(r, f, "q3_1"); return t == null ? "" : t.filter((v) => !exclusiveCodes(f, "q3_1").includes(v)).length; } },
     { key: "smoke_cur", label: "สูบบุหรี่ปัจจุบัน", codes: YES_NO, def: "ข้อ 4.1 = สูบทุกวัน (1) หรือ สูบบางวัน (2)",
       fn: (r) => (blank(r.q4_1) ? "" : yn([1, 2].includes(num(r.q4_1)))) },
-    { key: "alcohol_cur", label: "ดื่มเครื่องดื่มแอลกอฮอล์ปัจจุบัน", codes: YES_NO, def: "ข้อ 4.2 = ดื่ม (2)",
+    { key: "alcohol_cur", label: "ดื่มเครื่องดื่มแอลกอฮอล์ใน 12 เดือนที่ผ่านมา", codes: YES_NO, def: "ข้อ 4.2 = ดื่ม (2) คือดื่มอย่างน้อย 1 ครั้งใน 12 เดือนที่ผ่านมา",
       fn: (r) => (blank(r.q4_2) ? "" : yn(num(r.q4_2) === 2)) },
     { key: "no_exercise", label: "ไม่ออกกำลังกายเลย", codes: YES_NO, def: "ข้อ 4.3 = ไม่ออกกำลังกายเลย (1)",
       fn: (r) => (blank(r.q4_3) ? "" : yn(num(r.q4_3) === 1)) },
     { key: "msk_pain", label: "ปวดกล้ามเนื้อในช่วง 3 เดือน", codes: YES_NO, def: "ข้อ 7.1 ตอบแล้ว และไม่ได้เลือก “ไม่มี”",
       fn: (r, f) => { const t = ticked(r, f, "q7_1"); return t == null ? "" : yn(!t.includes(noneCode(f, "q7_1"))); } },
-    { key: "farmer", label: "อาชีพเกษตรกรรม", codes: YES_NO, def: "ข้อ 2.1 = เกษตรกรรม (1)",
+    { key: "farmer", label: "อาชีพเกษตรกรรม", codes: YES_NO, def: "ข้อ 2.1 อาชีพหลัก (อันดับ 1) = เกษตรกรรม (1)",
       fn: (r) => (blank(r.q2_1) ? "" : yn(num(r.q2_1) === 1)) },
   ];
   function derive(row, form) {
@@ -71,6 +75,11 @@
           add(q.id, "num", { codes: lab(q.o), miss: byVis(q) });
           q.o.filter((x) => x.other).forEach((x) => add(`${q.id}_o${x.v}_text`, "str"));
           break;
+        case "rank":   // rank 1 in the plain column, then _r2 / _r3
+          add(q.id, "num", { codes: lab(q.o), miss: byVis(q) });
+          for (let k = 2; k <= (q.max || 3); k++) add(`${q.id}_r${k}`, "num", { codes: lab(q.o), miss: (ctx) => (!ctx.vis(q) || !blank(ctx.row[q.id]) ? MISS.skip : MISS.na) });   // rank 1 given but no rank k = fewer picks, not a missing answer
+          q.o.filter((x) => x.other).forEach((x) => add(`${q.id}_o${x.v}_text`, "str"));
+          break;
         case "multi":
           q.o.forEach((x) => {
             add(`${q.id}_o${x.v}`, "num", { codes: [[1, "เลือก"], [0, "ไม่เลือก"]], miss: byVis(q) });
@@ -85,9 +94,16 @@
             const has = `${q.id}_${x.key}_has`;
             add(has, "num", { codes: [[1, "ไม่มี"], [2, "มี"]], miss: byVis(q) });
             if (x.other) add(`${q.id}_${x.key}_name`, "str");
-            ["n", "vacc", "deworm"].forEach((k) => add(`${q.id}_${x.key}_${k}`, "num", {
-              miss: (ctx) => (!ctx.vis(q) || num(ctx.row[has]) === 1 ? MISS.skip : MISS.na),
-            }));
+            ["n", "vacc", "deworm"].forEach((k) => {
+              // "ไม่ทราบ": the count stays blank (-9 in the export) and the _unk column says it was "don't know", not "not asked"
+              add(`${q.id}_${x.key}_${k}`, "num", {
+                miss: (ctx) => (!ctx.vis(q) || num(ctx.row[has]) === 1 || (k !== "n" && num(ctx.row[`${q.id}_${x.key}_n_unk`]) === 1) ? MISS.skip : MISS.na),
+              });
+              add(`${q.id}_${x.key}_${k}_unk`, "num", {
+                codes: [[1, "ไม่ทราบ"], [0, "ทราบ"]],
+                miss: (ctx) => (!ctx.vis(q) || num(ctx.row[has]) === 1 || (k !== "n" && num(ctx.row[`${q.id}_${x.key}_n_unk`]) === 1) ? MISS.skip : MISS.na),
+              });
+            });
           });
           break;
         default: add(q.id, "str");   // text, textarea, date
@@ -103,7 +119,7 @@
       if (q.type === "multi") { const t = ticked(row, form, q.id); if (t) a[q.id] = t; }
       else if (q.type === "grid") q.rows.forEach((r) => { if (!blank(row[r.id])) a[r.id] = num(row[r.id]); });
       else if (q.type === "dob") { if (!blank(row.q1_2_age)) a.q1_2_age = num(row.q1_2_age); }
-      else if (q.type === "single" || q.type === "number") { if (!blank(row[q.id])) a[q.id] = num(row[q.id]); }
+      else if (q.type === "single" || q.type === "rank" || q.type === "number") { if (!blank(row[q.id])) a[q.id] = num(row[q.id]); }
       else if (!blank(row[q.id])) a[q.id] = row[q.id];
     }
     return a;
