@@ -14,6 +14,8 @@
  *
  * v2: ผู้ดูแลแก้แบบสอบถามได้จากหน้า admin.html → เก็บทุกเวอร์ชันไว้ในชีต "forms"
  *     ต้องตั้ง ADMIN_CODE (คนละรหัสกับ TEAM_CODE ให้เฉพาะผู้ดูแล) แล้ว Deploy → Manage deployments → New version
+ * v4: คอลัมน์ "exclude" — หัวหน้าทีมใส่ 1 ในแถวที่ต้องการตัดออก (ส่งผิดคน ซ้ำ ฯลฯ) แดชบอร์ดและไฟล์ส่งออกจะข้ามแถวนั้น ไม่ต้องลบแถว
+ *     สคริปต์สร้างคอลัมน์นี้ให้เอง และเวลานักศึกษาส่งชุดเดิมซ้ำ (แก้ไขหลังส่ง) จะไม่ทับคอลัมน์ที่แอปไม่ได้ส่งมา (เช่น exclude)
  * v3: รหัส 3 ระดับ — รหัสทีมส่งข้อมูลได้อย่างเดียว อ่านข้อมูลดิบไม่ได้ (ข้อมูลสุขภาพ, PDPA)
  *     หน้าวิเคราะห์ใช้ READ_CODE (หรือ ADMIN_CODE) และส่งรหัสใน POST body ไม่ใส่ใน URL
  */
@@ -115,7 +117,10 @@ function doPost(e) {
     let header = sh.getLastRow() > 0 ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].filter(String) : [];
     const want = (body.columns || []).concat(...recs.map(Object.keys));
     want.forEach((k) => { if (header.indexOf(k) < 0) header.push(k); });
+    const newExclude = header.indexOf("exclude") < 0;   // column for the team lead: 1 = leave this row out of the dashboard and exports
+    if (newExclude) header.push("exclude");
     sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight("bold");
+    if (newExclude) sh.getRange(1, header.indexOf("exclude") + 1).setNote("ใส่ 1 เพื่อตัดแถวนี้ออกจากแดชบอร์ดและไฟล์ส่งออก (ไม่ลบข้อมูล) ว่าง = ใช้ตามปกติ");
     sh.setFrozenRows(1);
     // keep house numbers like 12/3 or dates as text (Sheets would turn them into dates)
     (body.textColumns || []).forEach((k) => {
@@ -127,11 +132,16 @@ function doPost(e) {
     const n = sh.getLastRow() - 1;
     const ids = n > 0 ? sh.getRange(2, uuidCol, n, 1).getValues().map((r) => String(r[0])) : [];
     const saved = [];
+    const known = new Set(body.columns || []);   // columns the web app owns; any other column (e.g. exclude) belongs to the team lead
     recs.forEach((r) => {
       const row = header.map((k) => (r[k] === undefined || r[k] === null ? "" : r[k]));
       const at = ids.indexOf(String(r.uuid));
       if (at >= 0) {
-        sh.getRange(at + 2, 1, 1, row.length).setValues([row]);   // re-sent after an edit: update in place
+        // re-sent after an edit: update in place, but keep what the team lead typed in columns the app does not send
+        const w = Math.min(header.length, sh.getMaxColumns());
+        const old = sh.getRange(at + 2, 1, 1, w).getValues()[0];
+        header.forEach((k, i) => { if (!known.has(k) && r[k] === undefined && old[i] !== undefined) row[i] = old[i]; });
+        sh.getRange(at + 2, 1, 1, row.length).setValues([row]);
       } else {
         sh.getRange(sh.getLastRow() + 1, 1, 1, row.length).setValues([row]);
         ids.push(String(r.uuid));

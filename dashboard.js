@@ -85,6 +85,10 @@
   }
 
   const withDerived = (rows) => rows.map((r) => ({ ...r, ...M69A.derive(r, S) }));
+  // rows the team lead marked with 1 in the "exclude" column of the Sheet (wrong person, duplicate...) are left out everywhere
+  const isExcluded = (r) => { const v = String(r.exclude == null ? "" : r.exclude).trim().toLowerCase(); return v !== "" && !["0", "no", "n", "false", "ไม่"].includes(v); };
+  let EXCL_N = 0;
+  const dropExcluded = (rows) => { EXCL_N = rows.filter(isExcluded).length; return rows.filter((r) => !isExcluded(r)); };
   const isMock = (r) => String(r.record_id || "").startsWith("MOCK") || r.iv_zone === "MOCK";
   function filtered() {
     return ALL.filter((r) => (F.mock || !isMock(r))
@@ -369,6 +373,7 @@
           mockN ? h("label", { class: "chk" }, h("input", { type: "checkbox", checked: F.mock, onchange: (e) => { F.mock = e.target.checked; render(); } }), `รวมข้อมูลจำลอง (${mockN})`) : null,
           h("span", { class: "meta" }, `${source} · โหลดเมื่อ ${new Date().toLocaleTimeString("th-TH")}`)),
         mockN && F.mock ? h("div", { class: "mockbar" }, `มีข้อมูลจำลอง (MOCK) ${mockN} ครัวเรือน — ตัวเลขยังไม่ใช่ผลจริง ลบแถวที่ record_id ขึ้นต้นด้วย MOCK ใน Sheet ก่อนเก็บข้อมูลจริง`) : null,
+        EXCL_N ? h("div", { class: "mockbar" }, `ตัดออก ${EXCL_N} แถว (คอลัมน์ exclude ใน Sheet) — ไม่รวมในตัวเลขและไฟล์ส่งออกของหน้านี้`) : null,
         exportPanel(),
         report()));
   }
@@ -417,7 +422,7 @@
     const url = h("input", { type: "url", value: settings.api, placeholder: "https://script.google.com/macros/s/…/exec" });
     const read = h("input", { type: "password", value: settings.read, placeholder: "รหัสดูผล (READ_CODE)", autocomplete: "off" });
     const remember = h("input", { type: "checkbox" });
-    const file = h("input", { type: "file", accept: ".csv,text/csv", onchange: async (e) => { const f = e.target.files[0]; if (!f) return; ALL = withDerived(parseCsv(await f.text())); source = `ไฟล์ ${f.name}`; render(); } });
+    const file = h("input", { type: "file", accept: ".csv,text/csv", onchange: async (e) => { const f = e.target.files[0]; if (!f) return; ALL = withDerived(dropExcluded(parseCsv(await f.text()))); source = `ไฟล์ ${f.name}`; render(); } });
     mount(app, h("main", { class: "wrap setup" },
       h("h1", null, "สรุปผลแบบสัมภาษณ์ชุมชน"),
       msg ? h("div", { class: "notice bad" }, msg) : null,
@@ -442,7 +447,7 @@
     try {
       const [rows, pub] = await Promise.all([fetchRows(), post({ action: "publishedForm" }).catch(() => null)]);
       if (pub && pub.form && !M69.validateForm(pub.form).length) { S = pub.form; indexForm(); }
-      ALL = withDerived(rows); source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
+      ALL = withDerived(dropExcluded(rows)); source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
     }
     catch (e) { setup(`โหลดไม่สำเร็จ: ${e.message || e}`); }
   }
