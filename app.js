@@ -5,7 +5,7 @@
   const PREVIEW = M69.preview;
   const app = document.getElementById("app");
   // preview keeps its practice records apart from real interviews and never sends them
-  const LS = { records: PREVIEW ? "m69.preview.records" : "m69.records", settings: "m69.settings", remember: "m69.remember", backup: "m69.lastBackup" };
+  const LS = { records: PREVIEW ? "m69.preview.records" : "m69.records", settings: "m69.settings", remember: "m69.remember", backup: "m69.lastBackup", students: "m69.students" };
   const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
   const BATCH = 20;
 
@@ -82,7 +82,7 @@
   // ------------------------------------------------------------ columns / flatten (what goes to Google Sheets)
   const COLUMNS = M69.columnSpec(S);
   const FIELDWORK = { from: "2026-11-04", to: "2026-11-13" };   // soft warning only: interview dates outside this window
-  const TEXT_COLUMNS = ["uuid", "record_id", "h_house_no", "h_house_note","h_village", "h_tambon", "h_amphoe", "h_province", "iv_first", "iv_last", "iv_faculty", "iv_zone", "iv_date"];
+  const TEXT_COLUMNS = ["uuid", "record_id", "h_house_no", "h_house_note","h_village", "h_tambon", "h_amphoe", "h_province", "created_at", "updated_at", "submitted_at", "started_at", "finished_at", "iv_sid", "iv_first", "iv_last", "iv_faculty", "iv_zone", "iv_date"];
 
   function progress(a) {
     const vis = allQuestions.filter((q) => q.type !== "computed" && visible(q, a));
@@ -94,7 +94,7 @@
     const a = rec.answers, row = {};
     COLUMNS.forEach((c) => (row[c.key] = ""));
     Object.assign(row, {
-      uuid: rec.uuid, record_id: rec.record_id, form_version: S.version, created_at: rec.created_at,
+      uuid: rec.uuid, record_id: rec.record_id, form_version: S.version, iv_sid_ok: a.iv_sid_ok === 1 ? 1 : 0, created_at: rec.created_at,
       updated_at: rec.updated_at, submitted_at: nowIso(), complete_pct: progress(a),
       started_at: rec.started_at || "", finished_at: rec.finished_at || "",
       duration_min: rec.started_at && rec.finished_at ? Math.max(0, Math.round((Date.parse(rec.finished_at) - Date.parse(rec.started_at)) / 60000)) : "",
@@ -169,6 +169,7 @@
   function rememberInterviewer(a) {
     const rem = {};
     allQuestions.filter((q) => q.remember).forEach((q) => { if (a[q.id]) rem[q.id] = a[q.id]; });
+    if (a.iv_sid_ok === 1) rem.iv_sid_ok = 1;   // the ID was found in the roster: its name and faculty come back locked
     store(LS.remember, rem);
   }
 
@@ -232,9 +233,85 @@
     if (shown("q1_2") && dups.length) add("q1_2", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีชุดที่เพศและวันเกิดตรงกันในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นคนเดียวกัน ให้แก้ชุดเดิมแทน ถ้าเป็นคนละคน (เช่น คนในบ้านเดียวกัน) ไม่ต้องทำอะไร`);
     return out;
   }
+  // ------------------------------------------------------------ student id: name and faculty come from the roster in the Sheet
+  // The roster lives in the "students" tab of the Google Sheet (never in this public repo). Found IDs are cached on the device
+  // so a known student keeps working offline; when an ID cannot be checked the fields stay editable and the server checks at save time.
+  const students = load(LS.students, {});   // SID -> { first, last, faculty, at }
+  const stuState = {};                       // SID -> { state: "checking" | "found" | "notfound" | "err", msg, noRoster, at }
+  let stuTimer = null;
+  const sidOf = (a) => String(a.iv_sid == null ? "" : a.iv_sid).replace(/[\s​]+/g, "").toUpperCase();
+  async function studentPost(sid) {
+    if (!navigator.onLine) throw new Error("ไม่มีสัญญาณ");
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const res = await fetch(settings.api, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ token: settings.team, action: "student", sid }), signal: ctl.signal });
+      const d = JSON.parse(await res.text());
+      if (!d.ok) throw new Error(d.error || "ไม่สำเร็จ");
+      if (typeof d.found !== "boolean") throw new Error("Apps Script ยังเป็นเวอร์ชันเก่า (ยังไม่มีรายชื่อนักศึกษา)");
+      return d;
+    } catch (e) {
+      throw new Error(e && e.name === "AbortError" ? "หมดเวลา สัญญาณช้า" : e && e.name === "TypeError" ? "เชื่อมต่อไม่ได้" : String((e && e.message) || e));
+    } finally { clearTimeout(t); }
+  }
+  function applyStudent(rec, s) {   // true when the answers changed
+    const a = rec.answers, fq = qById.get("iv_faculty");
+    const f = String(s.faculty || "").trim(), fac = fq && f ? fq.o.find((o) => o.label === f || String(o.v) === f) : null;
+    let changed = false;
+    const set = (k, v) => { if (v != null && v !== "" && a[k] !== v) { a[k] = v; changed = true; } };
+    set("iv_first", s.first); set("iv_last", s.last); if (fac) set("iv_faculty", fac.v);
+    if (a.iv_sid_ok !== 1) { a.iv_sid_ok = 1; changed = true; }
+    return changed;
+  }
+  function ensureStudent(rec) {
+    const a = rec.answers, sid = sidOf(a);
+    if (!qById.has("iv_sid")) return;   // an older published form without the student id question
+    if (!sid) { if (a.iv_sid_ok) delete a.iv_sid_ok; return; }
+    const known = students[sid];
+    if (known) { if (applyStudent(rec, known)) { touch(rec); renderSection(rec, { keepScroll: true }); } return; }
+    if (a.iv_sid_ok === 1) {   // the ID in the box is no longer the verified one: drop the roster's name and faculty (one student's name must never stay under another ID) and unlock
+      delete a.iv_sid_ok;
+      ["iv_first", "iv_last", "iv_faculty"].forEach((k) => delete a[k]);
+      [["iv_first", "input"], ["iv_last", "input"], ["iv_faculty", "select"]].forEach(([id, tag]) => { const el = document.querySelector(`#q-${id} ${tag}`); if (el) el.value = ""; });   // no re-render: the cursor must stay in the ID box
+    }
+    const st = stuState[sid];
+    if (st && (st.state === "checking" || Date.now() - st.at < 60e3)) return;
+    if (PREVIEW || !settings.api || !settings.team) { stuState[sid] = { state: "err", msg: "ยังไม่ได้ตั้งค่า URL และรหัสทีม", at: Date.now() }; return; }
+    clearTimeout(stuTimer);
+    stuTimer = setTimeout(async () => {
+      if (!currentRec || sidOf(currentRec.answers) !== sid) return;
+      stuState[sid] = { state: "checking", at: Date.now() };
+      try {
+        const d = await studentPost(sid);
+        if (d.found) { students[sid] = { first: d.first, last: d.last, faculty: d.faculty, at: Date.now() }; store(LS.students, students); stuState[sid] = { state: "found", at: Date.now() }; }
+        else stuState[sid] = { state: "notfound", noRoster: !!d.noRoster, at: Date.now() };
+      } catch (e) { stuState[sid] = { state: "err", msg: e.message, at: Date.now() }; }
+      if (currentRec && sidOf(currentRec.answers) === sid) refreshChecks(currentRec);
+    }, 700);
+  }
+  function paintStudent(rec) {
+    const a = rec.answers, sid = sidOf(a), locked = a.iv_sid_ok === 1;
+    document.querySelectorAll(".sidnote").forEach((el) => {
+      let msg = "";
+      if (locked) { const fq = qById.get("iv_faculty"), fo = fq && fq.o.find((o) => o.v === a.iv_faculty); msg = `พบรายชื่อ: ${[a.iv_first, a.iv_last].filter(Boolean).join(" ")}${fo ? " · " + fo.label : ""}`; }
+      else if (sid) {
+        const st = stuState[sid];
+        if (!st || st.state === "checking") msg = "กำลังตรวจรหัสกับรายชื่อ…";
+        else if (st.state === "notfound") msg = st.noRoster ? "ยังไม่มีรายชื่อนักศึกษาในระบบ — พิมพ์ชื่อ นามสกุล และเลือกคณะเอง" : "ไม่พบรหัสนี้ในรายชื่อ — ตรวจรหัสอีกครั้ง ถ้ารหัสถูกแล้วให้พิมพ์ชื่อ นามสกุล และเลือกคณะเอง (หัวหน้าทีมจะตรวจให้)";
+        else if (st.state === "err") msg = `ตรวจรหัสไม่ได้ (${st.msg}) — พิมพ์ชื่อ นามสกุล และเลือกคณะเอง ระบบจะตรวจให้ตอนส่ง`;
+      }
+      el.hidden = !msg;
+      el.textContent = msg;
+    });
+    [["iv_first", "input"], ["iv_last", "input"], ["iv_faculty", "select"]].forEach(([id, tag]) => {   // locked while they come from the roster
+      const el = document.querySelector(`#q-${id} ${tag}`);
+      if (el) el.disabled = locked && filled(a[id]);
+    });
+  }
+
   // fill the yellow note under each question on screen
   function refreshChecks(rec) {
     if (!rec) return;
+    ensureStudent(rec);
     const by = {};
     checks(rec).forEach((c) => (by[c.id] = (by[c.id] || []).concat(c.msg)));
     document.querySelectorAll(".qwarn").forEach((el) => {
@@ -248,6 +325,7 @@
       el.hidden = !others.length;
       mount(el, others.length ? [h("div", null, `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้ ${others.length + 1} ชุด (รวมชุดนี้) · เห็นเฉพาะข้อมูลในเครื่องนี้ ไม่รวมเครื่องอื่น`)] : []);
     });
+    paintStudent(rec);
   }
 
   // ------------------------------------------------------------ sync
@@ -470,6 +548,7 @@
     }
     card.append(body, h("div", { class: "qwarn", "data-q": q.id, hidden: true, role: "status" }));
     if (q.id === "h_house_no") card.append(h("div", { class: "qinfo", "data-q": q.id, hidden: true, role: "status" }));
+    if (q.id === "iv_sid") card.append(h("div", { class: "sidnote", hidden: true, role: "status" }));
     return card;
   }
 

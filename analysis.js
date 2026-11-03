@@ -154,7 +154,7 @@
       }
       if (deid) {
         out.pid = "P" + (await digest(`${salt}|${raw.uuid || raw.record_id || JSON.stringify(raw)}`)).slice(0, 10);
-        const iv = [raw.iv_first, raw.iv_last].filter(Boolean).join(" ").trim();
+        const iv = String(raw.iv_sid || "").trim() || [raw.iv_first, raw.iv_last].filter(Boolean).join(" ").trim();   // the student id when there is one: spelling no longer splits a person in two
         out.iv_id = iv ? "IV" + (await digest(`${salt}|iv|${iv}`)).slice(0, 6) : "";
       }
       rows.push(out);

@@ -14,6 +14,8 @@
  *
  * v2: ผู้ดูแลแก้แบบสอบถามได้จากหน้า admin.html → เก็บทุกเวอร์ชันไว้ในชีต "forms"
  *     ต้องตั้ง ADMIN_CODE (คนละรหัสกับ TEAM_CODE ให้เฉพาะผู้ดูแล) แล้ว Deploy → Manage deployments → New version
+ * v4: รหัสนักศึกษา — ชีต "students" (หัวหน้าทีมกรอก: sid | first | last | faculty) ให้แอปเติมชื่อ/คณะจากรหัส (action "student" ใช้รหัสทีม คืนเฉพาะชื่อของรหัสที่ถาม)
+ *     ตอนบันทึก สคริปต์ตรวจรหัสกับรายชื่อเอง (คอลัมน์ iv_sid_ok) และจดทุกครั้งที่ส่ง/แก้ลงชีต "activity" (เวลา รหัส ชื่อ ชุด สร้าง/แก้ คอลัมน์ที่เปลี่ยน — ไม่เก็บค่าคำตอบ)
  * v3: รหัส 3 ระดับ — รหัสทีมส่งข้อมูลได้อย่างเดียว อ่านข้อมูลดิบไม่ได้ (ข้อมูลสุขภาพ, PDPA)
  *     หน้าวิเคราะห์ใช้ READ_CODE (หรือ ADMIN_CODE) และส่งรหัสใน POST body ไม่ใส่ใน URL
  */
@@ -83,6 +85,12 @@ function readAction_(body) {
   const ok = (codeReady_(READ_CODE, "เปลี่ยนเป็นรหัสดูผล") && body.readCode === READ_CODE) || (adminReady_() && body.readCode === ADMIN_CODE);
   if (!ok) { log_(`${body.action}: wrong read code`); return json_({ ok: false, error: "รหัสดูผลไม่ถูกต้อง" }); }
   if (body.action === "publishedForm") return json_(getForm_());
+  if (body.action === "activity") {   // latest 300 save/edit events
+    const ash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ACTIVITY_SHEET);
+    if (!ash || ash.getLastRow() < 2) return json_({ ok: true, rows: [] });
+    const n = Math.min(300, ash.getLastRow() - 1);
+    return json_({ ok: true, rows: ash.getRange(ash.getLastRow() - n + 1, 1, n, ACTIVITY_HEADER.length).getDisplayValues() });
+  }
   const sh = sheet_();
   const values = sh.getLastRow() > 0 ? sh.getDataRange().getDisplayValues() : [];
   const header = values.shift() || [];
@@ -93,7 +101,8 @@ function readAction_(body) {
 function doPost(e) {
   let body;
   try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: "คำขอไม่ถูกต้อง" }); }
-  if (body.action === "rows" || body.action === "publishedForm") return readAction_(body);
+  if (body.action === "rows" || body.action === "publishedForm" || body.action === "activity") return readAction_(body);
+  if (body.action === "student") return studentAction_(body);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -109,6 +118,13 @@ function doPost(e) {
     if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
     const recs = body.records || [];
     if (!recs.length) return json_({ ok: true, saved: [] });
+    const roster = loadRoster_();   // null when nobody filled the "students" tab yet: then nothing is checked or overwritten
+    if (roster) recs.forEach((r) => {
+      const s = r.iv_sid ? roster[normSid_(r.iv_sid)] : null;
+      r.iv_sid_ok = s ? 1 : 0;
+      if (s) { if (s.first) r.iv_first = s.first; if (s.last) r.iv_last = s.last; }   // names come from the roster, not from typing
+    });
+    const events = [];
 
     const sh = sheet_();
     // header: the form's column order first, then anything new (a later form version adds columns at the end)
@@ -131,13 +147,18 @@ function doPost(e) {
       const row = header.map((k) => (r[k] === undefined || r[k] === null ? "" : r[k]));
       const at = ids.indexOf(String(r.uuid));
       if (at >= 0) {
+        const old = sh.getRange(at + 2, 1, 1, Math.min(header.length, sh.getMaxColumns())).getValues()[0];
+        const changed = changedCols_(header, old, row);
+        events.push(activityRow_(r, changed.length ? "update" : "resend", changed));
         sh.getRange(at + 2, 1, 1, row.length).setValues([row]);   // re-sent after an edit: update in place
       } else {
+        events.push(activityRow_(r, "new", []));
         sh.getRange(sh.getLastRow() + 1, 1, 1, row.length).setValues([row]);
         ids.push(String(r.uuid));
       }
       saved.push(r.uuid);
     });
+    try { writeActivity_(events); } catch (err) { log_("activity error " + err); }   // the log must never stop a save
     log_(`saved ${saved.length} (${saved.slice(0, 3).join(", ")}${saved.length > 3 ? ", …" : ""})`);
     return json_({ ok: true, saved: saved });
   } catch (err) {
@@ -146,6 +167,64 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ---------------------------------------------------------------- student roster + activity log
+const STUDENT_SHEET = "students";   // filled by the team lead: sid | first | last | faculty
+const ACTIVITY_SHEET = "activity";  // one row per save or edit
+const ACTIVITY_HEADER = ["time", "sid", "name", "uuid", "record_id", "action", "form_version", "complete_pct", "changed_columns"];
+const ACTIVITY_SKIP = ["updated_at", "submitted_at", "created_at", "started_at", "finished_at", "duration_min", "complete_pct", "iv_sid_ok"];
+function normSid_(v) {
+  return String(v == null ? "" : v).replace(/[๐-๙]/g, (c) => "๐๑๒๓๔๕๖๗๘๙".indexOf(c)).replace(/[\s​]+/g, "").toUpperCase();
+}
+function loadRoster_() {   // { SID: {first, last, faculty} } or null when there is no roster yet
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(STUDENT_SHEET);
+  if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return null;
+  const vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+  const names = { sid: ["sid", "id", "student_id", "รหัส", "รหัสนักศึกษา"], first: ["first", "ชื่อ"], last: ["last", "นามสกุล"], faculty: ["faculty", "คณะ"] };
+  const head = vals[0].map((x) => String(x).trim().toLowerCase());
+  const at = {};
+  let isHead = false;
+  Object.keys(names).forEach((k, n) => {
+    const i = head.findIndex((h) => names[k].indexOf(h) >= 0);
+    if (i >= 0) isHead = true;
+    at[k] = i >= 0 ? i : n;   // columns not named in a header row fall back to their position
+  });
+  const out = {};
+  for (let i = isHead ? 1 : 0; i < vals.length; i++) {
+    const sid = normSid_(vals[i][at.sid]);
+    if (sid) out[sid] = { first: String(vals[i][at.first] || "").trim(), last: String(vals[i][at.last] || "").trim(), faculty: String(vals[i][at.faculty] || "").trim() };
+  }
+  return Object.keys(out).length ? out : null;
+}
+/** POST { action:"student", token, sid } — คืนเฉพาะชื่อ/คณะของรหัสที่ถาม ไม่ส่งรายชื่อทั้งหมด (อ่านอย่างเดียว ไม่ต้อง lock) */
+function studentAction_(body) {
+  if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
+  const roster = loadRoster_();
+  if (!roster) return json_({ ok: true, found: false, noRoster: true });
+  const s = roster[normSid_(body.sid)];
+  return json_(s ? { ok: true, found: true, first: s.first, last: s.last, faculty: s.faculty } : { ok: true, found: false });
+}
+function changedCols_(header, old, row) {   // names of the columns whose value differs (values are never copied into the log)
+  const out = [];
+  header.forEach((k, i) => { if (ACTIVITY_SKIP.indexOf(k) < 0 && String(old[i] === undefined ? "" : old[i]) !== String(row[i])) out.push(k); });
+  return out;
+}
+function activityRow_(r, action, changed) {
+  return [new Date().toISOString(), String(r.iv_sid || ""), [r.iv_first, r.iv_last].filter(Boolean).join(" "), String(r.uuid || ""), String(r.record_id || ""), action,
+    String(r.form_version || ""), r.complete_pct === undefined ? "" : r.complete_pct, changed.slice(0, 40).join(",")];
+}
+function writeActivity_(events) {
+  if (!events.length) return;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(ACTIVITY_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(ACTIVITY_SHEET);
+    sh.getRange(1, 1, 1, ACTIVITY_HEADER.length).setValues([ACTIVITY_HEADER]).setFontWeight("bold");
+    sh.getRange(2, 1, Math.max(1, sh.getMaxRows() - 1), 1).setNumberFormat("@");   // keep the ISO time as text (Sheets would turn it into a date)
+    sh.setFrozenRows(1);
+  }
+  sh.getRange(sh.getLastRow() + 1, 1, events.length, ACTIVITY_HEADER.length).setValues(events);
 }
 
 // a code is usable once it was changed from the placeholder, is long enough and differs from the team code
