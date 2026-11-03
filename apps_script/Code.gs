@@ -16,6 +16,7 @@
  *     ต้องตั้ง ADMIN_CODE (คนละรหัสกับ TEAM_CODE ให้เฉพาะผู้ดูแล) แล้ว Deploy → Manage deployments → New version
  * v4: รหัสนักศึกษา — ชีต "students" (หัวหน้าทีมกรอก: sid | first | last | faculty) ให้แอปเติมชื่อ/คณะจากรหัส (action "student" ใช้รหัสทีม คืนเฉพาะชื่อของรหัสที่ถาม)
  *     ตอนบันทึก สคริปต์ตรวจรหัสกับรายชื่อเอง (คอลัมน์ iv_sid_ok) และจดทุกครั้งที่ส่ง/แก้ลงชีต "activity" (เวลา รหัส ชื่อ ชุด สร้าง/แก้ คอลัมน์ที่เปลี่ยน — ไม่เก็บค่าคำตอบ)
+ *     action "mine" (รหัสทีม) คืนรายการชุดที่ส่งแล้วของรหัสนักศึกษาหนึ่งคน (บ้านเลขที่ เพศ อายุ วันที่ ความครบ — ไม่มีคำตอบรายข้อ) สำหรับหน้า "รายการของฉัน"
  * v3: รหัส 3 ระดับ — รหัสทีมส่งข้อมูลได้อย่างเดียว อ่านข้อมูลดิบไม่ได้ (ข้อมูลสุขภาพ, PDPA)
  *     หน้าวิเคราะห์ใช้ READ_CODE (หรือ ADMIN_CODE) และส่งรหัสใน POST body ไม่ใส่ใน URL
  */
@@ -103,6 +104,7 @@ function doPost(e) {
   try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: "คำขอไม่ถูกต้อง" }); }
   if (body.action === "rows" || body.action === "publishedForm" || body.action === "activity") return readAction_(body);
   if (body.action === "student") return studentAction_(body);
+  if (body.action === "mine") return mineAction_(body);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -225,6 +227,28 @@ function writeActivity_(events) {
     sh.setFrozenRows(1);
   }
   sh.getRange(sh.getLastRow() + 1, 1, events.length, ACTIVITY_HEADER.length).setValues(events);
+}
+
+/** POST { action:"mine", token, sid } — ชุดที่ส่งแล้วของรหัสนักศึกษานี้ (ไม่รวมแถว MOCK และแถวที่ใส่ 1 ในคอลัมน์ exclude) ไม่มีคำตอบรายข้อ ไม่มีวันเกิด */
+function mineAction_(body) {
+  if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
+  const sid = normSid_(body.sid);
+  const sh = sheet_();
+  if (!sid || sh.getLastRow() < 2 || sh.getLastColumn() < 1) return json_({ ok: true, rows: [] });
+  const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  const vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues();
+  const ix = {};
+  ["uuid", "record_id", "iv_zone", "iv_sid", "h_house_type", "h_moo", "h_house_no", "q1_1", "q1_2_age", "iv_date", "complete_pct", "submitted_at", "exclude"].forEach((k) => (ix[k] = header.indexOf(k)));
+  const get = (row, k) => (ix[k] < 0 ? "" : String(row[ix[k]]).trim());
+  const isEx = (v) => v !== "" && ["0", "no", "n", "false", "ไม่"].indexOf(v.toLowerCase()) < 0;
+  const rows = [];
+  vals.forEach((row) => {
+    if (normSid_(get(row, "iv_sid")) !== sid) return;
+    if (get(row, "record_id").indexOf("MOCK") === 0 || get(row, "iv_zone") === "MOCK" || isEx(get(row, "exclude"))) return;
+    rows.push({ uuid: get(row, "uuid"), record_id: get(row, "record_id"), date: get(row, "iv_date"), htype: get(row, "h_house_type"), moo: get(row, "h_moo"), no: get(row, "h_house_no"),
+      sex: get(row, "q1_1"), age: get(row, "q1_2_age"), pct: get(row, "complete_pct"), t: get(row, "submitted_at") });
+  });
+  return json_({ ok: true, rows: rows.slice(-300).reverse() });   // newest first (rows are appended in the order they were first sent)
 }
 
 // a code is usable once it was changed from the placeholder, is long enough and differs from the team code

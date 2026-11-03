@@ -292,7 +292,7 @@
     const a = rec.answers, sid = sidOf(a), locked = a.iv_sid_ok === 1;
     document.querySelectorAll(".sidnote").forEach((el) => {
       let msg = "";
-      if (locked) { const fq = qById.get("iv_faculty"), fo = fq && fq.o.find((o) => o.v === a.iv_faculty); msg = `พบรายชื่อ: ${[a.iv_first, a.iv_last].filter(Boolean).join(" ")}${fo ? " · " + fo.label : ""}`; }
+      if (locked) { const fq = qById.get("iv_faculty"), fo = fq && fq.o.find((o) => o.v === a.iv_faculty), rf = students[sid] && students[sid].faculty; msg = `พบรายชื่อ: ${[a.iv_first, a.iv_last].filter(Boolean).join(" ")}${fo ? " · " + fo.label : rf ? ` · ในรายชื่อเป็น ${rf} — เลือกคณะ/สาขาให้ตรงเอง` : ""}`; }
       else if (sid) {
         const st = stuState[sid];
         if (!st || st.state === "checking") msg = "กำลังตรวจรหัสกับรายชื่อ…";
@@ -637,7 +637,7 @@
     }, h("b", null, n), h("span", null, label));
 
     mount(app,
-      topbar([h("a", { class: "btn ghost", href: "#/help" }, "วิธีใช้"), h("a", { class: "btn ghost", href: "#/settings" }, "ตั้งค่า")]),
+      topbar([h("a", { class: "btn ghost", href: "#/mine" }, "รายการของฉัน"), h("a", { class: "btn ghost", href: "#/help" }, "วิธีใช้"), h("a", { class: "btn ghost", href: "#/settings" }, "ตั้งค่า")]),
       h("main", { class: "wrap" },
         !PREVIEW && previewCount() ? h("div", { class: "notice" },
           `มีแบบสัมภาษณ์ ${previewCount()} ชุดที่กรอกไว้ในโหมดทดลอง (ยังไม่ถูกส่ง) `,
@@ -660,6 +660,72 @@
           h("button", { class: "btn ghost", type: "button", onclick: exportCodebook }, "ดาวน์โหลด Codebook")),
         h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น"),
         h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ`)));
+    updateNet();
+  }
+
+  // ------------------------------------------------------------ "รายการของฉัน": everything one student id has done
+  // the shared Sheet (any device, sent only) + this device (drafts, waiting, sent); needs no sign-in: the id only says whose list to show
+  const mineState = { sid: "", rows: null, msg: "", loading: false };
+  const normSid = (v) => String(v == null ? "" : v).replace(/[\s​]+/g, "").toUpperCase();
+  async function minePost(sid) {
+    if (!navigator.onLine) throw new Error("ไม่มีสัญญาณ");
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const res = await fetch(settings.api, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ token: settings.team, action: "mine", sid }), signal: ctl.signal });
+      const d = JSON.parse(await res.text());
+      if (!d.ok) throw new Error(d.error || "ไม่สำเร็จ");
+      if (!Array.isArray(d.rows)) throw new Error("Apps Script ยังเป็นเวอร์ชันเก่า");
+      return d.rows;
+    } catch (e) {
+      throw new Error(e && e.name === "AbortError" ? "หมดเวลา สัญญาณช้า" : e && e.name === "TypeError" ? "เชื่อมต่อไม่ได้" : String((e && e.message) || e));
+    } finally { clearTimeout(t); }
+  }
+  async function loadMine() {
+    const sid = normSid(mineState.sid);
+    if (!sid) { mineState.rows = null; mineState.msg = ""; return viewMine(); }
+    if (PREVIEW || !settings.api || !settings.team) { mineState.rows = null; mineState.msg = "ยังไม่ได้ตั้งค่า URL และรหัสทีม จึงแสดงเฉพาะที่อยู่ในเครื่องนี้"; return viewMine(); }
+    mineState.loading = true; mineState.msg = ""; viewMine();
+    try { mineState.rows = await minePost(sid); } catch (e) { mineState.rows = null; mineState.msg = `โหลดจาก Google Sheets ไม่ได้ (${e.message}) จึงแสดงเฉพาะที่อยู่ในเครื่องนี้`; }
+    mineState.loading = false;
+    if (location.hash === "#/mine") viewMine();
+  }
+  function viewMine() {
+    currentRec = null;
+    if (!mineState.sid) {
+      const last = Object.values(records).sort((p, q) => (q.updated_at || "").localeCompare(p.updated_at || "")).map((r) => r.answers.iv_sid).find(Boolean);
+      mineState.sid = String(load(LS.remember, {}).iv_sid || last || "");
+      if (mineState.sid && mineState.rows == null && !mineState.loading) setTimeout(loadMine, 0);
+    }
+    const sid = normSid(mineState.sid);
+    const mine = sid ? Object.values(records).filter((r) => normSid(r.answers.iv_sid) === sid) : [];
+    const known = new Set(mine.map((r) => r.uuid));
+    const away = (mineState.rows || []).filter((r) => !known.has(r.uuid));   // sent from another device
+    const sentCentral = (mineState.rows || []).length, sentLocal = mine.filter((r) => r.status === "sent" && !(mineState.rows || []).some((x) => x.uuid === r.uuid)).length;
+    const houseSet = new Set([...(mineState.rows || []).map((r) => (r.htype === "" || r.htype === "1" ? `${r.moo}|${r.no}` : r.uuid)), ...mine.map((r) => (houseKey(r.answers) || r.uuid))]);
+    const fmtD = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || "")); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("th-TH", { day: "numeric", month: "short" }) : String(s || ""); };
+    const input = h("input", { type: "text", value: mineState.sid, placeholder: "รหัสนักศึกษา", onkeydown: (e) => { if (e.key === "Enter") { mineState.sid = e.target.value; mineState.rows = null; loadMine(); } } });
+    const rowsEl = [
+      ...mine.sort((p, q) => (q.updated_at || "").localeCompare(p.updated_at || "")).map((r) => {
+        const a = r.answers, st = { draft: ["ฉบับร่าง", "draft"], ready: ["รอส่ง", "ready"], sent: ["ส่งแล้ว", "sent"] }[r.status] || ["?", ""];
+        return h("div", { class: "rec" }, h("a", { class: "rec-main", href: `#/form/${r.uuid}/0` },
+          h("b", null, `บ้านเลขที่ ${a.h_house_no || "–"} หมู่ ${a.h_moo || "–"}`), h("small", null, `${fmtD(a.iv_date)} · ${a.q1_1 ? { 1: "ชาย", 2: "หญิง" }[a.q1_1] || "" : ""}${a.q1_2_age != null && a.q1_2_age !== "" ? " " + a.q1_2_age + " ปี" : ""} · ตอบแล้ว ${progress(a)}% · ในเครื่องนี้`),
+          h("span", { class: "pbar thin" }, h("i", { style: `width:${progress(a)}%` }))), h("span", { class: `chip ${st[1]}` }, st[0]));
+      }),
+      ...away.map((r) => h("div", { class: "rec" }, h("div", { class: "rec-main", title: "ข้อมูลอยู่ในเครื่องอื่น: แก้ที่เครื่องเดิม หรือแจ้งหัวหน้าทีม" },
+        h("b", null, `บ้านเลขที่ ${r.htype === "" || r.htype === "1" ? r.no || "–" : "(ไม่มีเลขที่)"} หมู่ ${r.moo || "–"}`),
+        h("small", null, `${fmtD(r.date)} · ${{ 1: "ชาย", 2: "หญิง" }[r.sex] || ""}${r.age ? " " + r.age + " ปี" : ""} · ตอบแล้ว ${r.pct || "?"}% · อยู่ในเครื่องอื่น แก้ไม่ได้จากเครื่องนี้`),
+        h("span", { class: "pbar thin" }, h("i", { style: `width:${Math.min(100, Number(r.pct) || 0)}%` }))), h("span", { class: "chip sent" }, "ส่งแล้ว"))),
+    ];
+    mount(app,
+      topbar([h("a", { class: "btn ghost", href: "#/" }, "← รายการ")]),
+      h("main", { class: "wrap narrow" },
+        h("h1", null, "รายการของฉัน"),
+        h("p", { class: "fine" }, "กรอกรหัสนักศึกษาแล้วกด Enter หรือปุ่ม “โหลดรายการ” จะเห็นงานทั้งหมดของรหัสนั้น รวมที่ส่งจากเครื่องอื่น (ชุดที่ส่งแล้วจากเครื่องอื่นเปิดแก้จากเครื่องนี้ไม่ได้)"),
+        h("label", { class: "field" }, "รหัสนักศึกษา", input),
+        h("div", { class: "pager" }, h("button", { class: "btn primary", type: "button", disabled: mineState.loading, onclick: () => { mineState.sid = input.value; mineState.rows = null; loadMine(); } }, mineState.loading ? "กำลังโหลด…" : "โหลดรายการ")),
+        mineState.msg ? h("div", { class: "notice" }, mineState.msg) : null,
+        sid ? h("p", null, mineState.rows == null ? `ในเครื่องนี้: ส่งแล้ว ${mine.filter((r) => r.status === "sent").length} ชุด · ยังไม่ส่ง ${mine.filter((r) => r.status !== "sent").length} ชุด` : `ส่งแล้วใน Google Sheets ${sentCentral} ชุด${sentLocal ? ` + ส่งแล้วจากเครื่องนี้ที่ยังไม่เห็นในชีต ${sentLocal}` : ""} · บ้านทั้งหมด (รวมฉบับร่าง) ${houseSet.size} หลัง · ในเครื่องนี้ยังไม่ส่ง ${mine.filter((r) => r.status !== "sent").length} ชุด`) : null,
+        rowsEl.length ? h("div", { class: "list" }, rowsEl) : h("p", { class: "empty" }, sid ? (mineState.loading ? "" : "ยังไม่พบรายการของรหัสนี้") : "ยังไม่ได้กรอกรหัสนักศึกษา")));
     updateNet();
   }
 
@@ -1116,6 +1182,7 @@
     if (parts[0] === "form") viewForm(parts[1], Number(parts[2] || 0), new URLSearchParams(query || "").get("q"));
     else if (parts[0] === "settings") viewSettings();
     else if (parts[0] === "help") viewHelp();
+    else if (parts[0] === "mine") viewMine();
     else viewHome();
     if (keepScroll) window.scrollTo(0, y);
   }
