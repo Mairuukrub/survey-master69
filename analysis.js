@@ -42,7 +42,7 @@
       fn: (r, f) => { const t = ticked(r, f, "q3_1"); return t == null ? "" : t.filter((v) => !exclusiveCodes(f, "q3_1").includes(v)).length; } },
     { key: "smoke_cur", label: "สูบบุหรี่ปัจจุบัน", codes: YES_NO, def: "ข้อ 4.1 = สูบทุกวัน (1) หรือ สูบบางวัน (2)",
       fn: (r) => (blank(r.q4_1) ? "" : yn([1, 2].includes(num(r.q4_1)))) },
-    { key: "alcohol_cur", label: "ดื่มเครื่องดื่มแอลกอฮอล์ปัจจุบัน", codes: YES_NO, def: "ข้อ 4.2 = ดื่ม (2)",
+    { key: "alcohol_cur", label: "ดื่มเครื่องดื่มแอลกอฮอล์ใน 12 เดือนที่ผ่านมา", codes: YES_NO, def: "ข้อ 4.2 = ดื่ม (2) คือดื่มอย่างน้อย 1 ครั้งใน 12 เดือนที่ผ่านมา",
       fn: (r) => (blank(r.q4_2) ? "" : yn(num(r.q4_2) === 2)) },
     { key: "no_exercise", label: "ไม่ออกกำลังกายเลย", codes: YES_NO, def: "ข้อ 4.3 = ไม่ออกกำลังกายเลย (1)",
       fn: (r) => (blank(r.q4_3) ? "" : yn(num(r.q4_3) === 1)) },
