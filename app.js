@@ -9,6 +9,7 @@
   const LS_TOT = "m69.teamtotal";
   const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
   const BATCH = 20;
+  const APP_BUILD = window.APP_BUILD || "dev";
 
   // ------------------------------------------------------------ storage
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -95,7 +96,7 @@
     const a = rec.answers, row = {};
     COLUMNS.forEach((c) => (row[c.key] = ""));
     Object.assign(row, {
-      uuid: rec.uuid, record_id: rec.record_id, form_version: S.version, created_at: rec.created_at,
+      uuid: rec.uuid, record_id: rec.record_id, form_version: S.version, app_build: APP_BUILD, created_at: rec.created_at,
       updated_at: rec.updated_at, submitted_at: nowIso(), complete_pct: progress(a),
       started_at: rec.started_at || "", finished_at: rec.finished_at || "",
       duration_min: rec.started_at && rec.finished_at ? Math.max(0, Math.round((Date.parse(rec.finished_at) - Date.parse(rec.started_at)) / 60000)) : "",
@@ -530,7 +531,7 @@
       syncing = false; render({ keepScroll: true });
     }
   }
-  window.addEventListener("online", () => { updateNet(); syncPending({ quiet: true }); });
+  window.addEventListener("online", () => { updateNet(); syncPending({ quiet: true }); pollUpdates(true); });
   window.addEventListener("offline", updateNet);
   function updateNet() {
     const n = document.getElementById("net");
@@ -727,7 +728,7 @@
   }
 
   // ------------------------------------------------------------ views
-  let newFormVersion = null;
+  let newFormVersion = null, newBuild = null;
   function topbar(extra) {
     return [
       h("header", { class: "top" },
@@ -735,7 +736,7 @@
         h("div", { class: "top-r" }, h("span", { id: "net", class: "net" }), extra)),
       PREVIEW ? h("div", { class: "pvbar" }, `โหมดทดลองแบบสอบถามฉบับร่าง (${S.version}) — ข้อมูลที่กรอกในโหมดนี้ไม่ถูกส่งเข้า Sheet `,
         h("a", { class: "btn tiny", href: "index.html" }, "ไปแบบฟอร์มจริง")) : null,
-      newFormVersion ? h("div", { class: "pvbar new" }, `มีแบบสอบถามเวอร์ชันใหม่ (${newFormVersion}) `,
+      newFormVersion || newBuild ? h("div", { class: "pvbar new" }, newBuild ? `มีแอปเวอร์ชันใหม่ (${newBuild}) ` : `มีแบบสอบถามเวอร์ชันใหม่ (${newFormVersion}) `,
         h("button", { class: "btn tiny", type: "button", onclick: () => location.reload() }, "โหลดใหม่"),
         " คำตอบที่กรอกไว้ยังอยู่ครบ") : null,
     ];
@@ -743,10 +744,46 @@
   async function checkFormUpdate({ quiet = true } = {}) {
     try {
       const v = await M69.refresh(settings.api, settings.team);
-      if (v) { newFormVersion = v; if (!currentRec) render({ keepScroll: true }); else toast(`มีแบบสอบถามเวอร์ชันใหม่ (${v}) กลับหน้ารายการแล้วกดโหลดใหม่`); }
+      if (v) { newFormVersion = v; if (!currentRec) render({ keepScroll: true }); else toast(`มีแบบสอบถามเวอร์ชันใหม่ (${v}) จะอัปเดตเมื่อกลับหน้ารายการ`); }
       else if (!quiet) toast(`ใช้แบบสอบถามล่าสุดอยู่แล้ว (${S.version})`);
     } catch (e) { if (!quiet) toast(`ตรวจหาแบบสอบถามใหม่ไม่ได้: ${e.message || e}`, true); }
   }
+
+  // ------------------------------------------------------------ app updates
+  // version.js is a tiny file holding the build id: a different id on the server = new code is available.
+  // Checked only when online and the page is visible; offline it is skipped silently and the form keeps working.
+  async function checkAppUpdate() {
+    if (PREVIEW || !navigator.onLine) return false;
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const res = await fetch("version.js", { cache: "no-store", signal: ctl.signal });
+      if (!res.ok) return false;
+      const m = /APP_BUILD\s*=\s*"([^"]+)"/.exec(await res.text());
+      if (m && m[1] !== APP_BUILD) { newBuild = m[1]; return true; }
+    } catch { /* no signal or slow: try again at the next check */ } finally { clearTimeout(t); }
+    return false;
+  }
+  // Reload by itself, but only from the list screen: never during an interview, while sending, or on the settings page
+  // (typed settings would be lost). Answers live in localStorage, so a reload from the list loses nothing.
+  // One automatic try per target: if the server keeps offering a build the reload does not bring, the button stays.
+  const RELOAD_KEY = "m69.autoReload";
+  function maybeAutoReload() {
+    if ((!newBuild && !newFormVersion) || currentRec || syncing || (location.hash !== "" && location.hash !== "#/")) return;
+    const target = `${newBuild || ""}|${newFormVersion || ""}`;
+    try { if (sessionStorage.getItem(RELOAD_KEY) === target) return; sessionStorage.setItem(RELOAD_KEY, target); } catch { return; }
+    toast("มีเวอร์ชันใหม่ กำลังอัปเดต…");
+    setTimeout(() => { if (!currentRec && !syncing && (location.hash === "" || location.hash === "#/")) location.reload(); }, 1500);
+  }
+  let lastFormPoll = 0, toldBuild = null;
+  async function pollUpdates(force = false) {
+    if (PREVIEW || document.hidden || !navigator.onLine) return;
+    if (await checkAppUpdate() && !currentRec) render({ keepScroll: true });
+    if (settings.api && settings.team && (force || Date.now() - lastFormPoll > 10 * 60e3)) { lastFormPoll = Date.now(); await checkFormUpdate(); }
+    if (newBuild && currentRec && toldBuild !== newBuild) { toldBuild = newBuild; toast(`มีแอปเวอร์ชันใหม่ (${newBuild}) จะอัปเดตเมื่อกลับหน้ารายการ`); }
+    maybeAutoReload();
+  }
+  setInterval(() => pollUpdates(), 3 * 60e3);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) pollUpdates(true); });
 
   let homeFilter = { q: "", status: "" };
   const isStandalone = () => !!((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone);
@@ -818,9 +855,10 @@
           h("button", { class: "btn ghost", type: "button", onclick: () => { exportCsv(); render({ keepScroll: true }); }, disabled: !list.length }, "ดาวน์โหลดสำรอง (CSV)"),
           h("button", { class: "btn ghost", type: "button", onclick: exportCodebook }, "ดาวน์โหลด Codebook")),
         h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น"),
-        h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ`)));
+        h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ · แอป ${APP_BUILD}`)));
     paintTotals(); refreshTotals();
     updateNet();
+    maybeAutoReload();
   }
 
   // interviews filled in ?preview=1 live under their own key; let the user promote the ones with answers
@@ -1013,6 +1051,11 @@
         h("h2", null, "แบบสอบถาม"),
         h("p", null, `ใช้เวอร์ชัน ${S.version} (${{ published: "ที่ผู้ดูแลเผยแพร่", default: "ฉบับตั้งต้นในเว็บ", draft: "ฉบับร่างทดลอง" }[M69.source]})`),
         h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: () => checkFormUpdate({ quiet: false }) }, "ตรวจหาแบบสอบถามใหม่")),
+        h("p", null, `เวอร์ชันแอป ${APP_BUILD}`),
+        h("div", { class: "pager" }, h("button", { class: "btn", type: "button", onclick: async () => {
+          if (!navigator.onLine) { toast("ไม่มีสัญญาณ ตรวจไม่ได้", true); return; }
+          toast(await checkAppUpdate() ? `มีแอปเวอร์ชันใหม่ (${newBuild}) กลับหน้ารายการเพื่ออัปเดต` : `ใช้แอปล่าสุดอยู่แล้ว (${APP_BUILD})`);
+        } }, "ตรวจหาแอปเวอร์ชันใหม่")),
         h("h2", null, "การแสดงผล"),
         displayControls(),
         h("h2", null, "ความปลอดภัยของข้อมูลในเครื่องนี้"),
@@ -1299,5 +1342,5 @@
   const qs = new URLSearchParams(location.search);
   if (qs.get("mock")) mockRun(Math.min(500, Number(qs.get("mock")) || 100));
   else if (qs.get("selftest")) { localStorage.clear(); records = {}; selfTest().then(() => render()); }
-  else { render(); if (navigator.onLine) { syncPending({ quiet: true }); checkFormUpdate(); } }
+  else { render(); if (navigator.onLine) { syncPending({ quiet: true }); pollUpdates(true); } }
 })();
