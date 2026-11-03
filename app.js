@@ -293,6 +293,8 @@
     const strong = c.sets.filter((s) => ids.has(s.uuid));
     let medium = c.sets.filter((s) => yr.has(s.uuid));
     if (!filled(a.q1_2_year_be) && filled(a.q1_1) && age != null) medium = c.sets.filter((s) => String(s.sex) === String(a.q1_1) && Number(s.age) === Number(age));
+    // an estimated birth date is never proof of the same person: a full match is only an "อาจตรง" then
+    if (a.q1_2_est === 1) return { strong: [], medium: strong.concat(medium.filter((m) => !strong.includes(m))) };
     return { strong, medium };
   }
   function centralLines(rec) {
