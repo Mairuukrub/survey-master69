@@ -232,3 +232,6 @@ button.fb-mid:hover { background: var(--surface-2); }
 .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--surface-2); border-radius: 12px; }
 .seg button { border: 0; background: none; padding: 8px 14px; border-radius: 9px; font: inherit; font-size: 14px; color: var(--ink-2); cursor: pointer; min-height: 40px; }
 .seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+
+.dob .est { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+.dob .est input { width: auto; }
