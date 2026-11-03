@@ -14,6 +14,8 @@
  *
  * v2: ผู้ดูแลแก้แบบสอบถามได้จากหน้า admin.html → เก็บทุกเวอร์ชันไว้ในชีต "forms"
  *     ต้องตั้ง ADMIN_CODE (คนละรหัสกับ TEAM_CODE ให้เฉพาะผู้ดูแล) แล้ว Deploy → Manage deployments → New version
+ * v4: ตรวจบ้านข้ามเครื่อง — action "house" (ใช้รหัสทีม) บอกว่าบ้านเลขที่นี้มีข้อมูลในระบบแล้วกี่ชุด (เพศ อายุ วันที่ ผู้สัมภาษณ์) กับจำนวนรวม ไม่คืนชื่อ วันเกิด หรือคำตอบ
+ *     วางไฟล์นี้ทับของเดิม (คัดลอกรหัสเดิมกลับมาใส่) แล้ว Deploy → Manage deployments → แก้ไข → Version: New version → Deploy (URL เดิมใช้ต่อได้)
  * v3: รหัส 3 ระดับ — รหัสทีมส่งข้อมูลได้อย่างเดียว อ่านข้อมูลดิบไม่ได้ (ข้อมูลสุขภาพ, PDPA)
  *     หน้าวิเคราะห์ใช้ READ_CODE (หรือ ADMIN_CODE) และส่งรหัสใน POST body ไม่ใส่ใน URL
  */
@@ -94,6 +96,7 @@ function doPost(e) {
   let body;
   try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: "คำขอไม่ถูกต้อง" }); }
   if (body.action === "rows" || body.action === "publishedForm") return readAction_(body);
+  if (body.action === "house") return houseAction_(body);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -146,6 +149,48 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// house numbers typed many ways ("12-3", "๑๒/๓", "12 / 3") become one form ("12/3") — same rule as the web app (form_core.js)
+function normNo_(s) {
+  return String(s == null ? "" : s).replace(/[๐-๙]/g, (c) => "๐๑๒๓๔๕๖๗๘๙".indexOf(c)).replace(/[\s​]+/g, "").replace(/[-–—\\／]/g, "/");
+}
+
+/**
+ * POST { action:"house", token, moo, no, uuid } — นักศึกษาตรวจว่าบ้านนี้มีข้อมูลในระบบแล้วหรือยัง (ใช้รหัสทีม)
+ * คืน sets = ชุดของบ้านนั้น [{sex, age, date, by, fac}] (ไม่รวมชุด uuid ของตัวเอง) และ total = {people, houses} ทั้งหมู่บ้าน
+ * ไม่คืนชื่อผู้ตอบ วันเกิด หรือคำตอบรายข้อ · ไม่นับแถว MOCK และแถวที่หัวหน้าทีมใส่ 1 ในคอลัมน์ exclude · อ่านอย่างเดียว (ไม่ต้อง lock) · moo/no ว่าง = ขอเฉพาะจำนวนรวม
+ */
+function houseAction_(body) {
+  if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
+  const sh = sheet_();
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2 || sh.getLastColumn() < 1) return json_({ ok: true, sets: [], total: { people: 0, houses: 0 } });
+  const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const n = lastRow - 1;
+  const col = (k) => {
+    const c = header.indexOf(k);
+    return c < 0 ? new Array(n).fill("") : sh.getRange(2, c + 1, n, 1).getDisplayValues().map((r) => String(r[0]).trim());
+  };
+  const uuid = col("uuid"), rid = col("record_id"), zone = col("iv_zone"), htype = col("h_house_type");
+  const moo = col("h_moo"), no = col("h_house_no"), sex = col("q1_1"), age = col("q1_2_age");
+  const date = col("iv_date"), by = col("iv_first"), fac = col("iv_faculty"), excl = col("exclude");
+  const isEx = (v) => v !== "" && ["0", "no", "n", "false", "ไม่"].indexOf(v.toLowerCase()) < 0;   // team lead marked this row to leave out
+  const wantNo = normNo_(body.no), wantMoo = String(body.moo || "").trim();
+  const wantKey = wantNo && wantMoo ? wantMoo + "|" + wantNo : "";
+  const mine = String(body.uuid || "");
+  const houses = {};
+  let people = 0, noKey = 0;
+  const sets = [];
+  for (let i = 0; i < n; i++) {
+    if (rid[i].indexOf("MOCK") === 0 || zone[i] === "MOCK" || isEx(excl[i])) continue;
+    people++;
+    const nn = normNo_(no[i]);
+    const key = (htype[i] === "" || htype[i] === "1") && /^\d/.test(nn) && moo[i] !== "" ? moo[i] + "|" + nn : "";
+    if (key) houses[key] = 1; else noKey++;
+    if (wantKey && key === wantKey && uuid[i] !== mine && sets.length < 30) sets.push({ sex: sex[i], age: age[i], date: date[i], by: by[i], fac: fac[i] });
+  }
+  return json_({ ok: true, sets: sets, total: { people: people, houses: Object.keys(houses).length + noKey } });
 }
 
 // a code is usable once it was changed from the placeholder, is long enough and differs from the team code

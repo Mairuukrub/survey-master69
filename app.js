@@ -6,6 +6,7 @@
   const app = document.getElementById("app");
   // preview keeps its practice records apart from real interviews and never sends them
   const LS = { records: PREVIEW ? "m69.preview.records" : "m69.records", settings: "m69.settings", remember: "m69.remember", backup: "m69.lastBackup" };
+  const LS_TOT = "m69.teamtotal";
   const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
   const BATCH = 20;
 
@@ -228,13 +229,87 @@
     }));
     if (shown("h_house_no") && filled(a.h_house_no) && !M69.validHouseNo(M69.normHouseNo(a.h_house_no))) add("h_house_no", "บ้านเลขที่ควรเป็นตัวเลข เช่น 12 หรือ 12/3 — ตรวจอีกครั้ง (ถ้าไม่มีเลขที่ ให้เลือก “ไม่มีบ้านเลขที่” หรือ “ไม่ทราบ” ด้านบน)");
     if (shown("iv_date") && filled(a.iv_date) && (a.iv_date < FIELDWORK.from || a.iv_date > FIELDWORK.to)) add("iv_date", `วันที่ ${a.iv_date} อยู่นอกช่วงภาคสนาม (4–13 พ.ย. 2569) — ตรวจวันที่ หรือนาฬิกาของเครื่อง`);
+    const cm = centralSamePerson(rec);
+    if (shown("q1_2") && cm.length) add("q1_2", `ระบบกลางมี${sexLabel(a.q1_1)} อายุ ${computeAge(a)} ปี ของบ้านนี้แล้ว (${[shortDate(cm[0].date), cm[0].by, facLabel(cm[0].fac)].filter(Boolean).join(" · ")}) — อาจเป็นคนเดียวกัน ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่ (ถ้าใช่ ไม่ต้องสัมภาษณ์ซ้ำ)`);
     const dups = samePersonOf(rec);
     if (shown("q1_2") && dups.length) add("q1_2", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีชุดที่เพศและวันเกิดตรงกันในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นคนเดียวกัน ให้แก้ชุดเดิมแทน ถ้าเป็นคนละคน (เช่น คนในบ้านเดียวกัน) ไม่ต้องทำอะไร`);
     return out;
   }
+  // ------------------------------------------------------------ central check (needs a connection; never blocks anything)
+  // asks the Apps Script what the shared Sheet already holds for this house, so interviewers on other phones become visible
+  const central = {};   // houseKey -> { at, state: "loading" | "ok" | "err", sets, total, msg }
+  const CENTRAL_TTL = 45e3;
+  let centralTimer = null;
+  async function centralPost(payload, ms = 6000) {
+    if (!navigator.onLine) throw new Error("ไม่มีสัญญาณ");
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+    try {
+      const res = await fetch(settings.api, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ token: settings.team, ...payload }), signal: ctl.signal });
+      const data = JSON.parse(await res.text());
+      if (!data.ok) throw new Error(data.error || "ไม่สำเร็จ");
+      if (!Array.isArray(data.sets)) throw new Error("Apps Script ยังเป็นเวอร์ชันเก่า (ยังไม่มีการตรวจบ้านข้ามเครื่อง)");
+      return data;
+    } catch (e) {
+      throw new Error(e && e.name === "AbortError" ? "หมดเวลา สัญญาณช้า" : e && e.name === "TypeError" ? "เชื่อมต่อไม่ได้" : String((e && e.message) || e));
+    } finally { clearTimeout(t); }
+  }
+  function ensureCentral(rec) {
+    const k = houseKey(rec.answers);
+    if (!k || PREVIEW || !settings.api || !settings.team) return;
+    const c = central[k];
+    if (c && (c.busy || Date.now() - c.at < CENTRAL_TTL)) return;
+    clearTimeout(centralTimer);
+    centralTimer = setTimeout(async () => {
+      const a = rec.answers;
+      if (houseKey(a) !== k) return;   // house number changed again: a later call will ask
+      if (central[k]) central[k].busy = true; else central[k] = { at: Date.now(), state: "loading", busy: true };
+      try {
+        const d = await centralPost({ action: "house", moo: String(a.h_moo), no: M69.normHouseNo(a.h_house_no), uuid: rec.uuid });
+        central[k] = { at: Date.now(), state: "ok", sets: d.sets, total: d.total };
+      } catch (e) { central[k] = { at: Date.now(), state: "err", msg: e.message }; }
+      if (currentRec && houseKey(currentRec.answers) === k) refreshChecks(currentRec);
+    }, 600);
+  }
+  const shortDate = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || "")); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("th-TH", { day: "numeric", month: "short" }) : String(s || ""); };
+  const sexLabel = (v) => ({ 1: "ชาย", 2: "หญิง" })[Number(v)] || "?";
+  const facLabel = (v) => { const o = (qById.get("iv_faculty") || {}).o; const x = o && o.find((y) => String(y.v) === String(v)); return x ? x.label : ""; };
+  // sets already in the shared Sheet for this house with the same sex and age as the person being interviewed
+  function centralSamePerson(rec) {
+    const c = central[houseKey(rec.answers)], a = rec.answers, age = computeAge(a);
+    if (!c || c.state !== "ok" || !filled(a.q1_1) || age == null) return [];
+    return c.sets.filter((s) => String(s.sex) === String(a.q1_1) && Number(s.age) === Number(age));
+  }
+  function centralLines(rec) {
+    const c = central[houseKey(rec.answers)];
+    if (!c || c.state === "loading") return [];
+    if (c.state === "err") return [h("div", { class: "cnote" }, `ตรวจกับระบบกลางไม่ได้ (${c.msg}) — ถามผู้ตอบว่าบ้านนี้เคยมีคนสัมภาษณ์แล้วหรือไม่`)];
+    const a = rec.answers, lines = [];
+    const tot = c.total ? ` · ทั้งหมู่บ้านตอนนี้ ${c.total.people} คน ${c.total.houses} หลัง` : "";
+    if (!c.sets.length) lines.push(h("div", null, `ระบบกลาง (ส่งแล้ว): ยังไม่มีข้อมูลของบ้านนี้${tot}`));
+    else {
+      const one = (s) => `${sexLabel(s.sex)} ${s.age || "?"} ปี (${[shortDate(s.date), s.by, facLabel(s.fac)].filter(Boolean).join(" · ")})`;
+      lines.push(h("div", null, `ระบบกลาง (ส่งแล้ว): บ้านนี้มีข้อมูลแล้ว ${c.sets.length} ชุด — ${c.sets.map(one).join(" ; ")}${tot}`));
+    }
+    return lines;
+  }
+  // team total on the home screen: the last known value is shown at once, refreshed when online
+  function paintTotals() {
+    const el = document.getElementById("teamtot"), t = load(LS_TOT, null);
+    if (!el) return;
+    el.hidden = !t;
+    if (t) el.textContent = `ความคืบหน้าทั้งทีม (เฉพาะที่ส่งแล้ว): ${t.total.people} คน · ${t.total.houses} หลัง · ข้อมูล ${fmtWhen(t.at)}`;
+  }
+  let totalsAt = 0;
+  async function refreshTotals() {
+    if (PREVIEW || !settings.api || !settings.team || Date.now() - totalsAt < 30e3) return;
+    totalsAt = Date.now();
+    try { const d = await centralPost({ action: "house", moo: "", no: "" }); store(LS_TOT, { at: new Date().toISOString(), total: d.total }); paintTotals(); } catch { /* offline: keep the last known value */ }
+  }
+
   // fill the yellow note under each question on screen
   function refreshChecks(rec) {
     if (!rec) return;
+    ensureCentral(rec);
     const by = {};
     checks(rec).forEach((c) => (by[c.id] = (by[c.id] || []).concat(c.msg)));
     document.querySelectorAll(".qwarn").forEach((el) => {
@@ -245,8 +320,10 @@
     // neutral note (not a warning): how many people from this house are already on this device
     document.querySelectorAll(".qinfo").forEach((el) => {
       const others = housematesOf(rec), a = rec.answers;
-      el.hidden = !others.length;
-      mount(el, others.length ? [h("div", null, `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้ ${others.length + 1} ชุด (รวมชุดนี้) · เห็นเฉพาะข้อมูลในเครื่องนี้ ไม่รวมเครื่องอื่น`)] : []);
+      const lines = others.length ? [h("div", null, `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีในเครื่องนี้ ${others.length + 1} ชุด (รวมชุดนี้) · เห็นเฉพาะข้อมูลในเครื่องนี้ ไม่รวมเครื่องอื่น`)] : [];
+      lines.push(...centralLines(rec));
+      el.hidden = !lines.length;
+      mount(el, lines);
     });
   }
 
@@ -571,6 +648,7 @@
           h("button", { class: "btn primary big", type: "button", onclick: () => { const r = newRecord(); location.hash = `#/form/${r.uuid}/0`; } }, "+ สัมภาษณ์ครัวเรือนใหม่"),
           h("button", { class: "btn big", type: "button", disabled: syncing || !pending, onclick: () => syncPending() }, syncing ? "กำลังส่ง…" : `ส่งข้อมูลที่ค้าง (${pending})`)),
         h("div", { class: "stats" }, statBtn("draft", "ฉบับร่าง", drafts), statBtn("ready", "รอส่ง", pending), statBtn("sent", "ส่งแล้ว", sent)),
+        h("p", { class: "fine", id: "teamtot", hidden: true }),
         h("div", { class: "listhead" },
           h("h2", null, homeFilter.status ? `แบบสัมภาษณ์: ${{ draft: "ฉบับร่าง", ready: "รอส่ง", sent: "ส่งแล้ว" }[homeFilter.status]}` : "แบบสัมภาษณ์ในเครื่องนี้"),
           homeFilter.status ? h("button", { class: "btn tiny", type: "button", onclick: () => { homeFilter.status = ""; render({ keepScroll: true }); } }, "แสดงทั้งหมด") : null),
@@ -581,6 +659,7 @@
           h("button", { class: "btn ghost", type: "button", onclick: exportCodebook }, "ดาวน์โหลด Codebook")),
         h("p", { class: "fine" }, "ข้อมูลเก็บในเครื่องนี้จนกว่าจะส่งสำเร็จ ห้ามล้างข้อมูลเบราว์เซอร์ก่อนส่ง · ข้อมูลส่วนบุคคลใช้เพื่อการศึกษาและวางแผนพัฒนาชุมชนเท่านั้น"),
         h("p", { class: "fine" }, `แบบสอบถามเวอร์ชัน ${S.version} · ${S.sections.length} ส่วน · ${allQuestions.length} ข้อ`)));
+    paintTotals(); refreshTotals();
     updateNet();
   }
 
