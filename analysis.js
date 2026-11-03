@@ -77,7 +77,7 @@
           break;
         case "rank":   // rank 1 in the plain column, then _r2 / _r3
           add(q.id, "num", { codes: lab(q.o), miss: byVis(q) });
-          for (let k = 2; k <= (q.max || 3); k++) add(`${q.id}_r${k}`, "num", { codes: lab(q.o), miss: (ctx) => (!ctx.vis(q) ? MISS.skip : MISS.na) });
+          for (let k = 2; k <= (q.max || 3); k++) add(`${q.id}_r${k}`, "num", { codes: lab(q.o), miss: (ctx) => (!ctx.vis(q) || !blank(ctx.row[q.id]) ? MISS.skip : MISS.na) });   // rank 1 given but no rank k = fewer picks, not a missing answer
           q.o.filter((x) => x.other).forEach((x) => add(`${q.id}_o${x.v}_text`, "str"));
           break;
         case "multi":
