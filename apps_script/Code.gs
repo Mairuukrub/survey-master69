@@ -160,7 +160,7 @@ function normNo_(s) {
  * POST { action:"house", token, moo, no, uuid, fam?, sex?, d?, m?, y? } — ตรวจบ้านข้ามเครื่อง (ใช้รหัสทีม)
  * คืน sets = ชุดของบ้านนั้น [{uuid, t, sex, age, date, by, fac, fam?}] (ไม่รวมชุด uuid ของตัวเอง) และ total = {people, houses} ทั้งหมู่บ้าน
  *   fam: true  → แต่ละชุดแนบ "คำตอบระดับครอบครัว" (รายได้ หนี้สิน สัตว์เลี้ยง การจัดการขยะ สารเคมีเกษตร) ตามรายการ FAMILY_COLS เท่านั้น
- *   sex,d,m,y  → same = uuid ของชุดในบ้านเดียวกันที่เพศและวัน/เดือน/ปีเกิด (พ.ศ.) ตรงกัน (ไม่คืนวันเกิดของใคร)
+ *   sex,y[,d,m] → same = uuid ของชุดในบ้านเดียวกันที่เพศและวัน/เดือน/ปีเกิด (พ.ศ.) ตรงกันครบ · sameYear = เพศและปีเกิดตรงกัน แต่วัน/เดือนไม่ตรงหรือส่งมาไม่ครบ (ไม่คืนวันเกิดของใคร)
  * ไม่คืนชื่อผู้ตอบ วันเกิด คำตอบด้านสุขภาพ หรือคำตอบอื่นนอกรายการ · ไม่นับแถว MOCK และแถวที่ใส่ 1 ในคอลัมน์ exclude
  * อ่านอย่างเดียว (ไม่ต้อง lock) · moo/no ว่าง = ขอเฉพาะจำนวนรวม
  */
@@ -169,7 +169,7 @@ function houseAction_(body) {
   if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
   const sh = sheet_();
   const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
-  if (lastRow < 2 || lastCol < 1) return json_({ ok: true, sets: [], same: [], total: { people: 0, houses: 0 } });
+  if (lastRow < 2 || lastCol < 1) return json_({ ok: true, sets: [], same: [], sameYear: [], total: { people: 0, houses: 0 } });
   const header = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
   const vals = sh.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
   const ix = {};
@@ -182,10 +182,10 @@ function houseAction_(body) {
   const wantNo = normNo_(body.no), wantMoo = String(body.moo || "").trim();
   const wantKey = wantNo && wantMoo ? wantMoo + "|" + wantNo : "";
   const mine = String(body.uuid || "");
-  const person = body.sex && body.d && body.m && body.y ? [String(body.sex), Number(body.d), Number(body.m), Number(body.y)] : null;
+  const person = body.sex && body.y ? { sex: String(body.sex), d: Number(body.d) || 0, m: Number(body.m) || 0, y: Number(body.y) } : null;
   const houses = {};
   let people = 0, noKey = 0;
-  const sets = [], same = [];
+  const sets = [], same = [], sameYear = [];
   vals.forEach((row) => {
     if (get(row, "record_id").indexOf("MOCK") === 0 || get(row, "iv_zone") === "MOCK" || isEx(get(row, "exclude"))) return;
     people++;
@@ -194,7 +194,9 @@ function houseAction_(body) {
     if (key) houses[key] = 1; else noKey++;
     if (!wantKey || key !== wantKey || get(row, "uuid") === mine) return;
     const uuid = get(row, "uuid");
-    if (person && get(row, "q1_1") === person[0] && Number(get(row, "q1_2_day")) === person[1] && Number(get(row, "q1_2_month")) === person[2] && Number(get(row, "q1_2_year_be")) === person[3]) same.push(uuid);
+    if (person && get(row, "q1_1") === person.sex && Number(get(row, "q1_2_year_be")) === person.y) {
+      if (person.d && person.m && Number(get(row, "q1_2_day")) === person.d && Number(get(row, "q1_2_month")) === person.m) same.push(uuid); else sameYear.push(uuid);
+    }
     if (sets.length >= 30) return;
     const s = { uuid: uuid, t: get(row, "submitted_at"), sex: get(row, "q1_1"), age: get(row, "q1_2_age"), date: get(row, "iv_date"), by: get(row, "iv_first"), fac: get(row, "iv_faculty") };
     if (body.fam) {
@@ -203,7 +205,7 @@ function houseAction_(body) {
     }
     sets.push(s);
   });
-  return json_({ ok: true, sets: sets, same: same, total: { people: people, houses: Object.keys(houses).length + noKey } });
+  return json_({ ok: true, sets: sets, same: same, sameYear: sameYear, total: { people: people, houses: Object.keys(houses).length + noKey } });
 }
 
 // a code is usable once it was changed from the placeholder, is long enough and differs from the team code

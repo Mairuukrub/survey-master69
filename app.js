@@ -232,8 +232,8 @@
     if (shown("h_house_no") && filled(a.h_house_no) && !M69.validHouseNo(M69.normHouseNo(a.h_house_no))) add("h_house_no", "บ้านเลขที่ควรเป็นตัวเลข เช่น 12 หรือ 12/3 — ตรวจอีกครั้ง (ถ้าไม่มีเลขที่ ให้เลือก “ไม่มีบ้านเลขที่” หรือ “ไม่ทราบ” ด้านบน)");
     if (shown("iv_date") && filled(a.iv_date) && (a.iv_date < FIELDWORK.from || a.iv_date > FIELDWORK.to)) add("iv_date", `วันที่ ${a.iv_date} อยู่นอกช่วงภาคสนาม (4–13 พ.ย. 2569) — ตรวจวันที่ หรือนาฬิกาของเครื่อง`);
     const cm = centralSamePerson(rec), who = (s) => [shortDate(s.date), s.by, facLabel(s.fac)].filter(Boolean).join(" · ");
-    if (shown("q1_2") && cm.strong.length) add("q1_2", `ระบบกลางมีคนที่เพศและวัน/เดือน/ปีเกิดตรงกัน (${who(cm.strong[0])}) — น่าจะเป็นคนเดียวกัน ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่ (ถ้าใช่ ไม่ต้องสัมภาษณ์ซ้ำ)`);
-    else if (shown("q1_2") && cm.weak.length) add("q1_2", `ระบบกลางมี${sexLabel(a.q1_1)} อายุ ${computeAge(a)} ปี ของบ้านนี้ (${who(cm.weak[0])}) แต่วันเกิดไม่ตรงหรือยังกรอกไม่ครบ — อาจเป็นคนเดียวกัน ตรวจอีกครั้ง`);
+    if (shown("q1_2") && cm.strong.length) add("q1_2", `ตรงมาก: ระบบกลางมีคนในบ้านนี้ที่เพศและวัน/เดือน/ปีเกิดตรงกัน (${who(cm.strong[0])}) — น่าจะเป็นคนเดียวกัน ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่ (ถ้าใช่ ไม่ต้องสัมภาษณ์ซ้ำ)`);
+    else if (shown("q1_2") && cm.medium.length) add("q1_2", `อาจตรง: ระบบกลางมีคนในบ้านนี้ที่เพศเดียวกันและ${filled(a.q1_2_year_be) ? "ปีเกิดตรงกัน" : "อายุเท่ากัน"} (${who(cm.medium[0])}) แต่วัน/เดือนเกิดต่างกันหรือยังไม่ครบ (ผู้สูงอายุมักไม่ทราบวันเกิดที่แน่นอน) — ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่`);
     const dups = samePersonOf(rec);
     if (shown("q1_2") && dups.length) add("q1_2", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีชุดที่เพศและวันเกิดตรงกันในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นคนเดียวกัน ให้แก้ชุดเดิมแทน ถ้าเป็นคนละคน (เช่น คนในบ้านเดียวกัน) ไม่ต้องทำอะไร`);
     return out;
@@ -256,8 +256,8 @@
       throw new Error(e && e.name === "AbortError" ? "หมดเวลา สัญญาณช้า" : e && e.name === "TypeError" ? "เชื่อมต่อไม่ได้" : String((e && e.message) || e));
     } finally { clearTimeout(t); }
   }
-  // sex + full birth date, only when all of it is filled in (this is what identifies the same person)
-  const pkOf = (a) => ([a.q1_1, a.q1_2_day, a.q1_2_month, a.q1_2_year_be].every(filled) ? [a.q1_1, a.q1_2_day, a.q1_2_month, a.q1_2_year_be].join("|") : "");
+  // what identifies the same person: sex + birth year, and day/month when they are filled in (empty until sex and year are known)
+  const pkOf = (a) => (filled(a.q1_1) && filled(a.q1_2_year_be) ? [a.q1_1, a.q1_2_day || "", a.q1_2_month || "", a.q1_2_year_be].join("|") : "");
   function ensureCentral(rec) {
     const k = houseKey(rec.answers);
     if (!k || PREVIEW || !settings.api || !settings.team) return;
@@ -272,7 +272,7 @@
       try {
         const d = await centralPost({ action: "house", moo: String(a.h_moo), no: M69.normHouseNo(a.h_house_no), uuid: rec.uuid, fam: true,
           ...(pkNow ? { sex: a.q1_1, d: a.q1_2_day, m: a.q1_2_month, y: a.q1_2_year_be } : {}) });
-        central[k] = { at: Date.now(), state: "ok", sets: d.sets, same: d.same || [], pk: pkNow, total: d.total };
+        central[k] = { at: Date.now(), state: "ok", sets: d.sets, same: d.same || [], sameYear: d.sameYear || [], pk: pkNow, total: d.total };
       } catch (e) { central[k] = { at: Date.now(), state: "err", msg: e.message, pk: pkNow }; }
       if (currentRec && houseKey(currentRec.answers) === k) refreshChecks(currentRec);
     }, 600);
@@ -280,15 +280,19 @@
   const shortDate = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || "")); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("th-TH", { day: "numeric", month: "short" }) : String(s || ""); };
   const sexLabel = (v) => ({ 1: "ชาย", 2: "หญิง" })[Number(v)] || "?";
   const facLabel = (v) => { const o = (qById.get("iv_faculty") || {}).o; const x = o && o.find((y) => String(y.v) === String(v)); return x ? x.label : ""; };
-  // sets already in the shared Sheet for this house: strong = same sex and full birth date (confirmed by the server),
-  // weak = same sex and age only (birth date different or not filled in yet)
+  // sets already in the shared Sheet for the SAME HOUSE, in two levels (the server compares; no birth date comes back):
+  //   strong = same sex + full birth date · medium = same sex + birth year (day/month differ or are not filled in; elderly people often
+  //   do not know them), or, while no birth year is entered, same sex + same age
   function centralSamePerson(rec) {
-    const c = central[houseKey(rec.answers)], a = rec.answers, age = computeAge(a), none = { strong: [], weak: [] };
+    const c = central[houseKey(rec.answers)], a = rec.answers, none = { strong: [], medium: [] };
+    const age = filled(a.q1_2_age) ? Number(a.q1_2_age) : computeAge(a);   // age typed in directly when the birth date is not known
     if (!c || c.state !== "ok") return none;
-    const ids = c.pk === pkOf(a) ? new Set(c.same || []) : new Set();
+    const fresh = c.pk === pkOf(a);
+    const ids = fresh ? new Set(c.same || []) : new Set(), yr = fresh ? new Set(c.sameYear || []) : new Set();
     const strong = c.sets.filter((s) => ids.has(s.uuid));
-    const weak = filled(a.q1_1) && age != null ? c.sets.filter((s) => !ids.has(s.uuid) && String(s.sex) === String(a.q1_1) && Number(s.age) === Number(age)) : [];
-    return { strong, weak };
+    let medium = c.sets.filter((s) => yr.has(s.uuid));
+    if (!filled(a.q1_2_year_be) && filled(a.q1_1) && age != null) medium = c.sets.filter((s) => String(s.sex) === String(a.q1_1) && Number(s.age) === Number(age));
+    return { strong, medium };
   }
   function centralLines(rec) {
     const c = central[houseKey(rec.answers)];
