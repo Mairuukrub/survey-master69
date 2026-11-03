@@ -19,6 +19,9 @@
 
  * v4: ตรวจบ้านข้ามเครื่อง — action "house" (ใช้รหัสทีม) บอกว่าบ้านเลขที่นี้มีข้อมูลในระบบแล้วกี่ชุด (เพศ อายุ วันที่ ผู้สัมภาษณ์) กับจำนวนรวม ไม่คืนชื่อ วันเกิด หรือคำตอบ
  *     วางไฟล์นี้ทับของเดิม (คัดลอกรหัสเดิมกลับมาใส่) แล้ว Deploy → Manage deployments → แก้ไข → Version: New version → Deploy (URL เดิมใช้ต่อได้)
+ * v4: รหัสนักศึกษา — ชีต "students" (หัวหน้าทีมกรอก: sid | first | last | faculty) ให้แอปเติมชื่อ/คณะจากรหัส (action "student" ใช้รหัสทีม คืนเฉพาะชื่อของรหัสที่ถาม)
+ *     ตอนบันทึก สคริปต์ตรวจรหัสกับรายชื่อเอง (คอลัมน์ iv_sid_ok) และจดทุกครั้งที่ส่ง/แก้ลงชีต "activity" (เวลา รหัส ชื่อ ชุด สร้าง/แก้ คอลัมน์ที่เปลี่ยน — ไม่เก็บค่าคำตอบ)
+ *     action "mine" (รหัสทีม) คืนรายการชุดที่ส่งแล้วของรหัสนักศึกษาหนึ่งคน (บ้านเลขที่ เพศ อายุ วันที่ ความครบ — ไม่มีคำตอบรายข้อ) สำหรับหน้า "รายการของฉัน"
  * v3: รหัส 3 ระดับ — รหัสทีมส่งข้อมูลได้อย่างเดียว อ่านข้อมูลดิบไม่ได้ (ข้อมูลสุขภาพ, PDPA)
  *     หน้าวิเคราะห์ใช้ READ_CODE (หรือ ADMIN_CODE) และส่งรหัสใน POST body ไม่ใส่ใน URL
  */
@@ -88,6 +91,12 @@ function readAction_(body) {
   const ok = (codeReady_(READ_CODE, "เปลี่ยนเป็นรหัสดูผล") && body.readCode === READ_CODE) || (adminReady_() && body.readCode === ADMIN_CODE);
   if (!ok) { log_(`${body.action}: wrong read code`); return json_({ ok: false, error: "รหัสดูผลไม่ถูกต้อง" }); }
   if (body.action === "publishedForm") return json_(getForm_());
+  if (body.action === "activity") {   // latest 300 save/edit events
+    const ash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ACTIVITY_SHEET);
+    if (!ash || ash.getLastRow() < 2) return json_({ ok: true, rows: [] });
+    const n = Math.min(300, ash.getLastRow() - 1);
+    return json_({ ok: true, rows: ash.getRange(ash.getLastRow() - n + 1, 1, n, ACTIVITY_HEADER.length).getDisplayValues() });
+  }
   const sh = sheet_();
   const values = sh.getLastRow() > 0 ? sh.getDataRange().getDisplayValues() : [];
   const header = values.shift() || [];
@@ -98,8 +107,10 @@ function readAction_(body) {
 function doPost(e) {
   let body;
   try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: "คำขอไม่ถูกต้อง" }); }
-  if (body.action === "rows" || body.action === "publishedForm") return readAction_(body);
+  if (body.action === "rows" || body.action === "publishedForm" || body.action === "activity") return readAction_(body);
   if (body.action === "house") return houseAction_(body);
+  if (body.action === "student") return studentAction_(body);
+  if (body.action === "mine") return mineAction_(body);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -115,6 +126,13 @@ function doPost(e) {
     if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
     const recs = body.records || [];
     if (!recs.length) return json_({ ok: true, saved: [] });
+    const roster = loadRoster_();   // null when nobody filled the "students" tab yet: then nothing is checked or overwritten
+    if (roster) recs.forEach((r) => {
+      const s = r.iv_sid ? roster[normSid_(r.iv_sid)] : null;
+      r.iv_sid_ok = s ? 1 : 0;
+      if (s) { if (s.first) r.iv_first = s.first; if (s.last) r.iv_last = s.last; }   // names come from the roster, not from typing
+    });
+    const events = [];
 
     const sh = sheet_();
     // header: the form's column order first, then anything new (a later form version adds columns at the end)
@@ -145,13 +163,17 @@ function doPost(e) {
         const w = Math.min(header.length, sh.getMaxColumns());
         const old = sh.getRange(at + 2, 1, 1, w).getValues()[0];
         header.forEach((k, i) => { if (!known.has(k) && r[k] === undefined && old[i] !== undefined) row[i] = old[i]; });
-        sh.getRange(at + 2, 1, 1, row.length).setValues([row]);
+        const changed = changedCols_(header, old, row);
+        events.push(activityRow_(r, changed.length ? "update" : "resend", changed));
+        sh.getRange(at + 2, 1, 1, row.length).setValues([row]);   // re-sent after an edit: update in place
       } else {
+        events.push(activityRow_(r, "new", []));
         sh.getRange(sh.getLastRow() + 1, 1, 1, row.length).setValues([row]);
         ids.push(String(r.uuid));
       }
       saved.push(r.uuid);
     });
+    try { writeActivity_(events); } catch (err) { log_("activity error " + err); }   // the log must never stop a save
     log_(`saved ${saved.length} (${saved.slice(0, 3).join(", ")}${saved.length > 3 ? ", …" : ""})`);
     return json_({ ok: true, saved: saved });
   } catch (err) {
@@ -217,6 +239,86 @@ function houseAction_(body) {
     sets.push(s);
   });
   return json_({ ok: true, sets: sets, same: same, sameYear: sameYear, total: { people: people, houses: Object.keys(houses).length + noKey } });
+}
+
+// ---------------------------------------------------------------- student roster + activity log
+const STUDENT_SHEET = "students";   // filled by the team lead: sid | first | last | faculty
+const ACTIVITY_SHEET = "activity";  // one row per save or edit
+const ACTIVITY_HEADER = ["time", "sid", "name", "uuid", "record_id", "action", "form_version", "complete_pct", "changed_columns"];
+const ACTIVITY_SKIP = ["updated_at", "submitted_at", "created_at", "started_at", "finished_at", "duration_min", "complete_pct", "iv_sid_ok"];
+function normSid_(v) {
+  return String(v == null ? "" : v).replace(/[๐-๙]/g, (c) => "๐๑๒๓๔๕๖๗๘๙".indexOf(c)).replace(/[\s​]+/g, "").toUpperCase();
+}
+function loadRoster_() {   // { SID: {first, last, faculty} } or null when there is no roster yet
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(STUDENT_SHEET);
+  if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return null;
+  const vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+  const names = { sid: ["sid", "id", "student_id", "รหัส", "รหัสนักศึกษา"], first: ["first", "ชื่อ"], last: ["last", "นามสกุล"], faculty: ["faculty", "คณะ"] };
+  const head = vals[0].map((x) => String(x).trim().toLowerCase());
+  const at = {};
+  let isHead = false;
+  Object.keys(names).forEach((k, n) => {
+    const i = head.findIndex((h) => names[k].indexOf(h) >= 0);
+    if (i >= 0) isHead = true;
+    at[k] = i >= 0 ? i : n;   // columns not named in a header row fall back to their position
+  });
+  const out = {};
+  for (let i = isHead ? 1 : 0; i < vals.length; i++) {
+    const sid = normSid_(vals[i][at.sid]);
+    if (sid) out[sid] = { first: String(vals[i][at.first] || "").trim(), last: String(vals[i][at.last] || "").trim(), faculty: String(vals[i][at.faculty] || "").trim() };
+  }
+  return Object.keys(out).length ? out : null;
+}
+/** POST { action:"student", token, sid } — คืนเฉพาะชื่อ/คณะของรหัสที่ถาม ไม่ส่งรายชื่อทั้งหมด (อ่านอย่างเดียว ไม่ต้อง lock) */
+function studentAction_(body) {
+  if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
+  const roster = loadRoster_();
+  if (!roster) return json_({ ok: true, found: false, noRoster: true });
+  const s = roster[normSid_(body.sid)];
+  return json_(s ? { ok: true, found: true, first: s.first, last: s.last, faculty: s.faculty } : { ok: true, found: false });
+}
+function changedCols_(header, old, row) {   // names of the columns whose value differs (values are never copied into the log)
+  const out = [];
+  header.forEach((k, i) => { if (ACTIVITY_SKIP.indexOf(k) < 0 && String(old[i] === undefined ? "" : old[i]) !== String(row[i])) out.push(k); });
+  return out;
+}
+function activityRow_(r, action, changed) {
+  return [new Date().toISOString(), String(r.iv_sid || ""), [r.iv_first, r.iv_last].filter(Boolean).join(" "), String(r.uuid || ""), String(r.record_id || ""), action,
+    String(r.form_version || ""), r.complete_pct === undefined ? "" : r.complete_pct, changed.slice(0, 40).join(",")];
+}
+function writeActivity_(events) {
+  if (!events.length) return;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(ACTIVITY_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(ACTIVITY_SHEET);
+    sh.getRange(1, 1, 1, ACTIVITY_HEADER.length).setValues([ACTIVITY_HEADER]).setFontWeight("bold");
+    sh.getRange(2, 1, Math.max(1, sh.getMaxRows() - 1), 1).setNumberFormat("@");   // keep the ISO time as text (Sheets would turn it into a date)
+    sh.setFrozenRows(1);
+  }
+  sh.getRange(sh.getLastRow() + 1, 1, events.length, ACTIVITY_HEADER.length).setValues(events);
+}
+
+/** POST { action:"mine", token, sid } — ชุดที่ส่งแล้วของรหัสนักศึกษานี้ (ไม่รวมแถว MOCK และแถวที่ใส่ 1 ในคอลัมน์ exclude) ไม่มีคำตอบรายข้อ ไม่มีวันเกิด */
+function mineAction_(body) {
+  if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
+  const sid = normSid_(body.sid);
+  const sh = sheet_();
+  if (!sid || sh.getLastRow() < 2 || sh.getLastColumn() < 1) return json_({ ok: true, rows: [] });
+  const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  const vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues();
+  const ix = {};
+  ["uuid", "record_id", "iv_zone", "iv_sid", "h_house_type", "h_moo", "h_house_no", "q1_1", "q1_2_age", "iv_date", "complete_pct", "submitted_at", "exclude"].forEach((k) => (ix[k] = header.indexOf(k)));
+  const get = (row, k) => (ix[k] < 0 ? "" : String(row[ix[k]]).trim());
+  const isEx = (v) => v !== "" && ["0", "no", "n", "false", "ไม่"].indexOf(v.toLowerCase()) < 0;
+  const rows = [];
+  vals.forEach((row) => {
+    if (normSid_(get(row, "iv_sid")) !== sid) return;
+    if (get(row, "record_id").indexOf("MOCK") === 0 || get(row, "iv_zone") === "MOCK" || isEx(get(row, "exclude"))) return;
+    rows.push({ uuid: get(row, "uuid"), record_id: get(row, "record_id"), date: get(row, "iv_date"), htype: get(row, "h_house_type"), moo: get(row, "h_moo"), no: get(row, "h_house_no"),
+      sex: get(row, "q1_1"), age: get(row, "q1_2_age"), pct: get(row, "complete_pct"), t: get(row, "submitted_at") });
+  });
+  return json_({ ok: true, rows: rows.slice(-300).reverse() });   // newest first (rows are appended in the order they were first sent)
 }
 
 // a code is usable once it was changed from the placeholder, is long enough and differs from the team code

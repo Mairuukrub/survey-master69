@@ -38,6 +38,7 @@
         { id: "h_tambon", t: "ตำบล", type: "text", req: true, default: "บ้านเหล่า" },
         { id: "h_amphoe", t: "อำเภอ", type: "text", req: true, default: "บ้านฝาง" },
         { id: "h_province", t: "จังหวัด", type: "text", fixed: "ขอนแก่น" },
+        { id: "iv_sid", t: "รหัสนักศึกษาผู้สัมภาษณ์", type: "text", req: true, remember: true, hint: "กรอกรหัสนักศึกษา ชื่อและคณะจะขึ้นให้เอง" },
         { id: "iv_first", t: "ชื่อนักศึกษาผู้สัมภาษณ์", type: "text", req: true, remember: true },
         { id: "iv_last", t: "นามสกุล", type: "text", req: true, remember: true },
         { id: "iv_faculty", t: "คณะ", type: "single", ui: "select", o: O("MD", "DT", "VM", "PH-Envi", "PH-Occ", "PH-Duo", "AMS-MT", "AMS-PT"), req: true, remember: true },

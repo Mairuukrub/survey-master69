@@ -16,6 +16,7 @@
   }
   function forgetRead() { try { sessionStorage.removeItem(READ_KEY); localStorage.removeItem(READ_KEY); } catch { /* private mode */ } }
   let settings = { api: qp.get("api") || load("m69.settings", {}).api || "", read: getRead() };
+  let ACT = [];          // latest save/edit events from the "activity" tab of the Sheet
   let ALL = [];          // rows as objects keyed by column
   let source = "";
   const F = { moo: "", sex: "", age: "", mock: true, sec: "s15" };
@@ -235,6 +236,18 @@
       if (!ivBuild[k] || t > ivBuild[k].t) ivBuild[k] = { t, build: r.app_build || "", form: r.form_version || "" };
     });
     const newestSent = Object.values(ivBuild).reduce((m, x) => (x.t > m.t ? x : m), { t: "", build: "" });
+    // one line per student id: how many interviews, when the last one was sent, and whether the ID matched the roster
+    const facName = (v) => { const q = Q.iv_faculty, o = q && q.o && q.o.find((x) => String(x.v) === String(v)); return o ? o.label : v || ""; };
+    const whenOf = (s) => { const t = Date.parse(s); return Number.isFinite(t) ? t : 0; };
+    const whenTxt = (s) => { const t = Date.parse(s); return Number.isFinite(t) ? new Date(t).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : String(s || ""); };
+    const stu = {};
+    R.forEach((r) => {
+      const k = String(r.iv_sid || "").trim() || "(ไม่มีรหัส)";
+      const x = (stu[k] = stu[k] || { n: 0, pct: [], last: "", name: "", fac: "", ok: true, mismatch: 0 });
+      x.n++; x.pct.push(num(r.complete_pct) || 0);
+      if (whenOf(r.submitted_at) >= whenOf(x.last)) { x.last = r.submitted_at || ""; x.name = [r.iv_first, r.iv_last].filter(Boolean).join(" "); x.fac = facName(r.iv_faculty); }
+      if (String(r.iv_sid_ok) !== "1") x.mismatch++;
+    });
     const median = (v) => { if (!v.length) return null; const s = [...v].sort((p, q) => p - q), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
     const SHORT_MIN = 10;   // a full interview in under 10 minutes deserves a second look
     // several people per house are expected (the unit is the person); group rows by house to count coverage
@@ -352,6 +365,14 @@
           Object.keys(ivBuild).length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "ผู้สัมภาษณ์"), h("th", null, "แอป"), h("th", null, "ฟอร์ม"), h("th", null, "ส่งล่าสุด"))),
             h("tbody", null, Object.entries(ivBuild).sort((a, b) => b[1].t.localeCompare(a[1].t)).map(([k, v]) => h("tr", null, h("td", null, k),
               h("td", { class: v.build !== newestSent.build ? "flag" : "" }, `${v.build || "–"}${v.build !== newestSent.build ? " · เก่ากว่า" : ""}`), h("td", null, v.form || "–"), h("td", null, v.t.slice(0, 16).replace("T", " ")))))) : h("p", { class: "empty-c" }, "ยังไม่มีข้อมูล")),
+        card("รายนักศึกษา (จากรหัสนักศึกษา)", "รหัสที่ไม่ตรงกับรายชื่อในชีต students ติด “ตรวจ” · ชื่อและคณะมาจากรายชื่อ ไม่ใช่ที่พิมพ์เอง",
+          Object.keys(stu).length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "รหัส"), h("th", null, "ชื่อ"), h("th", null, "คณะ"), h("th", { class: "n" }, "ชุด"), h("th", { class: "n" }, "ตอบครบเฉลี่ย"), h("th", null, "ส่งล่าสุด"))),
+            h("tbody", null, Object.entries(stu).sort((a, b) => b[1].n - a[1].n).map(([k, v]) => h("tr", null, h("td", null, k), h("td", null, v.name || "–"), h("td", null, v.fac || "–"),
+              h("td", { class: "n" }, v.n), h("td", { class: "n" }, `${(v.pct.reduce((p, q) => p + q, 0) / v.pct.length).toFixed(0)}%`),
+              h("td", { class: v.mismatch ? "flag" : "" }, `${whenTxt(v.last)}${v.mismatch ? " · ตรวจ" : ""}`))))) : h("p", { class: "empty-c" }, "ยังไม่มีข้อมูล"), true),
+        card("ความเคลื่อนไหวล่าสุด (log การส่งและแก้ไข)", "50 รายการล่าสุด · new = ส่งครั้งแรก, update = แก้หลังส่ง (แสดงชื่อคอลัมน์ที่เปลี่ยน ไม่แสดงค่า), resend = ส่งซ้ำโดยไม่มีอะไรเปลี่ยน",
+          ACT.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "เวลา"), h("th", null, "นักศึกษา"), h("th", null, "การกระทำ"), h("th", null, "ชุด"), h("th", null, "คอลัมน์ที่เปลี่ยน"))),
+            h("tbody", null, ACT.slice(-50).reverse().map((e) => h("tr", null, h("td", null, whenTxt(e[0])), h("td", null, `${e[2] || ""} (${e[1] || "–"})`), h("td", { class: e[5] === "update" ? "flag" : "" }, e[5] || ""), h("td", null, e[4] || ""), h("td", null, String(e[8] || "").slice(0, 90)))))) : h("p", { class: "empty-c" }, "ยังไม่มี log (ต้องวาง Code.gs ใหม่ และมีการส่งข้อมูลอย่างน้อยหนึ่งครั้ง)"), true),
         card("อาจเป็นคนเดียวกันที่ถูกสัมภาษณ์ซ้ำ", "บ้านเลขที่ เพศ และวันเกิดตรงกันมากกว่า 1 แถว — ถ้าเป็นคนเดียวกัน ควรเก็บแถวที่ครบกว่าแล้วลบอีกแถวใน Sheet",
           samePerson.length ? h("table", { class: "tbl" }, h("thead", null, h("tr", null, h("th", null, "หมู่ / บ้านเลขที่"), h("th", { class: "n" }, "แถว"), h("th", null, "ผู้สัมภาษณ์ · วันที่"))),
             h("tbody", null, samePerson.map((g) => h("tr", null, h("td", null, `หมู่ ${g[0].h_moo} · ${g[0].h_house_no}`), h("td", { class: "n flag" }, g.length),
@@ -456,7 +477,8 @@
     if (!settings.api || !settings.read) return setup();
     mount(app, h("main", { class: "wrap" }, h("p", null, "กำลังโหลดข้อมูล…")));
     try {
-      const [rows, pub] = await Promise.all([fetchRows(), post({ action: "publishedForm" }).catch(() => null)]);
+      const [rows, pub, act] = await Promise.all([fetchRows(), post({ action: "publishedForm" }).catch(() => null), post({ action: "activity" }).catch(() => null)]);
+      ACT = act && Array.isArray(act.rows) ? act.rows : [];
       if (pub && pub.form && !M69.validateForm(pub.form).length) { S = pub.form; indexForm(); }
       ALL = withDerived(dropExcluded(rows)); source = `Google Sheets ${ALL.length} แถว · แบบสอบถาม ${S.version}`; render();
     }

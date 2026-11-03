@@ -235,3 +235,6 @@ button.fb-mid:hover { background: var(--surface-2); }
 
 .dob .est { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--ink-2); }
 .dob .est input { width: auto; }
+.sidnote { margin-top: 10px; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--ink-2); font-size: 14px; line-height: 1.45; }
+.sidnote[hidden] { display: none; }
+input:disabled, select:disabled { opacity: .75; cursor: not-allowed; }
