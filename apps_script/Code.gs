@@ -168,40 +168,55 @@ function normNo_(s) {
 }
 
 /**
- * POST { action:"house", token, moo, no, uuid } — นักศึกษาตรวจว่าบ้านนี้มีข้อมูลในระบบแล้วหรือยัง (ใช้รหัสทีม)
- * คืน sets = ชุดของบ้านนั้น [{sex, age, date, by, fac}] (ไม่รวมชุด uuid ของตัวเอง) และ total = {people, houses} ทั้งหมู่บ้าน
- * ไม่คืนชื่อผู้ตอบ วันเกิด หรือคำตอบรายข้อ · ไม่นับแถว MOCK และแถวที่หัวหน้าทีมใส่ 1 ในคอลัมน์ exclude · อ่านอย่างเดียว (ไม่ต้อง lock) · moo/no ว่าง = ขอเฉพาะจำนวนรวม
+ * POST { action:"house", token, moo, no, uuid, fam?, sex?, d?, m?, y? } — ตรวจบ้านข้ามเครื่อง (ใช้รหัสทีม)
+ * คืน sets = ชุดของบ้านนั้น [{uuid, t, sex, age, date, by, fac, fam?}] (ไม่รวมชุด uuid ของตัวเอง) และ total = {people, houses} ทั้งหมู่บ้าน
+ *   fam: true  → แต่ละชุดแนบ "คำตอบระดับครอบครัว" (รายได้ หนี้สิน สัตว์เลี้ยง การจัดการขยะ สารเคมีเกษตร) ตามรายการ FAMILY_COLS เท่านั้น
+ *   sex,y[,d,m] → same = uuid ของชุดในบ้านเดียวกันที่เพศและวัน/เดือน/ปีเกิด (พ.ศ.) ตรงกันครบ · sameYear = เพศและปีเกิดตรงกัน แต่วัน/เดือนไม่ตรงหรือส่งมาไม่ครบ (ไม่คืนวันเกิดของใคร)
+ * ไม่คืนชื่อผู้ตอบ วันเกิด คำตอบด้านสุขภาพ หรือคำตอบอื่นนอกรายการ · ไม่นับแถว MOCK และแถวที่ใส่ 1 ในคอลัมน์ exclude
+ * อ่านอย่างเดียว (ไม่ต้อง lock) · moo/no ว่าง = ขอเฉพาะจำนวนรวม
  */
+const FAMILY_COLS = /^(q1_8|q1_9|q1_9_amount|q11_[1-4](_.+)?|q12_1_1(_.+)?|q12_1_2(_.+)?|q12_3_1(_o\d+_text)?|q12_3_1_1(_.+)?)$/;
 function houseAction_(body) {
   if (body.token !== TEAM_CODE) return json_({ ok: false, error: "รหัสทีมไม่ถูกต้อง" });
   const sh = sheet_();
-  const lastRow = sh.getLastRow();
-  if (lastRow < 2 || sh.getLastColumn() < 1) return json_({ ok: true, sets: [], total: { people: 0, houses: 0 } });
-  const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-  const n = lastRow - 1;
-  const col = (k) => {
-    const c = header.indexOf(k);
-    return c < 0 ? new Array(n).fill("") : sh.getRange(2, c + 1, n, 1).getDisplayValues().map((r) => String(r[0]).trim());
-  };
-  const uuid = col("uuid"), rid = col("record_id"), zone = col("iv_zone"), htype = col("h_house_type");
-  const moo = col("h_moo"), no = col("h_house_no"), sex = col("q1_1"), age = col("q1_2_age");
-  const date = col("iv_date"), by = col("iv_first"), fac = col("iv_faculty"), excl = col("exclude");
+  const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return json_({ ok: true, sets: [], same: [], sameYear: [], total: { people: 0, houses: 0 } });
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  const vals = sh.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
+  const ix = {};
+  ["uuid", "record_id", "iv_zone", "h_house_type", "h_moo", "h_house_no", "q1_1", "q1_2_age", "q1_2_day", "q1_2_month", "q1_2_year_be", "iv_date", "iv_first", "iv_faculty", "exclude", "submitted_at"]
+    .forEach((k) => (ix[k] = header.indexOf(k)));
+  const famIx = [];
+  header.forEach((k, i) => { if (FAMILY_COLS.test(k)) famIx.push([k, i]); });
+  const get = (row, k) => (ix[k] < 0 ? "" : String(row[ix[k]]).trim());
   const isEx = (v) => v !== "" && ["0", "no", "n", "false", "ไม่"].indexOf(v.toLowerCase()) < 0;   // team lead marked this row to leave out
   const wantNo = normNo_(body.no), wantMoo = String(body.moo || "").trim();
   const wantKey = wantNo && wantMoo ? wantMoo + "|" + wantNo : "";
   const mine = String(body.uuid || "");
+  const person = body.sex && body.y ? { sex: String(body.sex), d: Number(body.d) || 0, m: Number(body.m) || 0, y: Number(body.y) } : null;
   const houses = {};
   let people = 0, noKey = 0;
-  const sets = [];
-  for (let i = 0; i < n; i++) {
-    if (rid[i].indexOf("MOCK") === 0 || zone[i] === "MOCK" || isEx(excl[i])) continue;
+  const sets = [], same = [], sameYear = [];
+  vals.forEach((row) => {
+    if (get(row, "record_id").indexOf("MOCK") === 0 || get(row, "iv_zone") === "MOCK" || isEx(get(row, "exclude"))) return;
     people++;
-    const nn = normNo_(no[i]);
-    const key = (htype[i] === "" || htype[i] === "1") && /^\d/.test(nn) && moo[i] !== "" ? moo[i] + "|" + nn : "";
+    const t = get(row, "h_house_type"), nn = normNo_(get(row, "h_house_no")), moo = get(row, "h_moo");
+    const key = (t === "" || t === "1") && /^\d/.test(nn) && moo !== "" ? moo + "|" + nn : "";
     if (key) houses[key] = 1; else noKey++;
-    if (wantKey && key === wantKey && uuid[i] !== mine && sets.length < 30) sets.push({ sex: sex[i], age: age[i], date: date[i], by: by[i], fac: fac[i] });
-  }
-  return json_({ ok: true, sets: sets, total: { people: people, houses: Object.keys(houses).length + noKey } });
+    if (!wantKey || key !== wantKey || get(row, "uuid") === mine) return;
+    const uuid = get(row, "uuid");
+    if (person && get(row, "q1_1") === person.sex && Number(get(row, "q1_2_year_be")) === person.y) {
+      if (person.d && person.m && Number(get(row, "q1_2_day")) === person.d && Number(get(row, "q1_2_month")) === person.m) same.push(uuid); else sameYear.push(uuid);
+    }
+    if (sets.length >= 30) return;
+    const s = { uuid: uuid, t: get(row, "submitted_at"), sex: get(row, "q1_1"), age: get(row, "q1_2_age"), date: get(row, "iv_date"), by: get(row, "iv_first"), fac: get(row, "iv_faculty") };
+    if (body.fam) {
+      s.fam = {};
+      famIx.forEach((p) => { const v = String(row[p[1]]).trim(); if (v !== "") s.fam[p[0]] = v; });
+    }
+    sets.push(s);
+  });
+  return json_({ ok: true, sets: sets, same: same, sameYear: sameYear, total: { people: people, houses: Object.keys(houses).length + noKey } });
 }
 
 // a code is usable once it was changed from the placeholder, is long enough and differs from the team code

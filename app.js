@@ -100,6 +100,8 @@
       started_at: rec.started_at || "", finished_at: rec.finished_at || "",
       duration_min: rec.started_at && rec.finished_at ? Math.max(0, Math.round((Date.parse(rec.finished_at) - Date.parse(rec.started_at)) / 60000)) : "",
     });
+    const fp = famProvenance(rec);
+    row.fam_from = fp.from; row.fam_q = fp.q;
     for (const q of allQuestions) {
       if (!visible(q, a)) continue;  // skipped by the form's own logic: stays blank
       switch (q.type) {
@@ -229,8 +231,9 @@
     }));
     if (shown("h_house_no") && filled(a.h_house_no) && !M69.validHouseNo(M69.normHouseNo(a.h_house_no))) add("h_house_no", "บ้านเลขที่ควรเป็นตัวเลข เช่น 12 หรือ 12/3 — ตรวจอีกครั้ง (ถ้าไม่มีเลขที่ ให้เลือก “ไม่มีบ้านเลขที่” หรือ “ไม่ทราบ” ด้านบน)");
     if (shown("iv_date") && filled(a.iv_date) && (a.iv_date < FIELDWORK.from || a.iv_date > FIELDWORK.to)) add("iv_date", `วันที่ ${a.iv_date} อยู่นอกช่วงภาคสนาม (4–13 พ.ย. 2569) — ตรวจวันที่ หรือนาฬิกาของเครื่อง`);
-    const cm = centralSamePerson(rec);
-    if (shown("q1_2") && cm.length) add("q1_2", `ระบบกลางมี${sexLabel(a.q1_1)} อายุ ${computeAge(a)} ปี ของบ้านนี้แล้ว (${[shortDate(cm[0].date), cm[0].by, facLabel(cm[0].fac)].filter(Boolean).join(" · ")}) — อาจเป็นคนเดียวกัน ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่ (ถ้าใช่ ไม่ต้องสัมภาษณ์ซ้ำ)`);
+    const cm = centralSamePerson(rec), who = (s) => [shortDate(s.date), s.by, facLabel(s.fac)].filter(Boolean).join(" · ");
+    if (shown("q1_2") && cm.strong.length) add("q1_2", `ตรงมาก: ระบบกลางมีคนในบ้านนี้ที่เพศและวัน/เดือน/ปีเกิดตรงกัน (${who(cm.strong[0])}) — น่าจะเป็นคนเดียวกัน ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่ (ถ้าใช่ ไม่ต้องสัมภาษณ์ซ้ำ)`);
+    else if (shown("q1_2") && cm.medium.length) add("q1_2", `อาจตรง: ระบบกลางมีคนในบ้านนี้ที่เพศเดียวกันและ${filled(a.q1_2_year_be) ? "ปีเกิดตรงกัน" : "อายุเท่ากัน"} (${who(cm.medium[0])}) แต่วัน/เดือนเกิดต่างกันหรือยังไม่ครบ (ผู้สูงอายุมักไม่ทราบวันเกิดที่แน่นอน) — ถามผู้ตอบว่าเคยถูกสัมภาษณ์แล้วหรือไม่`);
     const dups = samePersonOf(rec);
     if (shown("q1_2") && dups.length) add("q1_2", `บ้านเลขที่ ${a.h_house_no} หมู่ ${a.h_moo} มีชุดที่เพศและวันเกิดตรงกันในเครื่องนี้แล้ว ${dups.length} ชุด (${dups.map((r) => r.answers.iv_date || (r.created_at || "").slice(0, 10)).join(", ")}) — ถ้าเป็นคนเดียวกัน ให้แก้ชุดเดิมแทน ถ้าเป็นคนละคน (เช่น คนในบ้านเดียวกัน) ไม่ต้องทำอะไร`);
     return out;
@@ -253,31 +256,43 @@
       throw new Error(e && e.name === "AbortError" ? "หมดเวลา สัญญาณช้า" : e && e.name === "TypeError" ? "เชื่อมต่อไม่ได้" : String((e && e.message) || e));
     } finally { clearTimeout(t); }
   }
+  // what identifies the same person: sex + birth year, and day/month when they are filled in (empty until sex and year are known)
+  const pkOf = (a) => (filled(a.q1_1) && filled(a.q1_2_year_be) ? [a.q1_1, a.q1_2_day || "", a.q1_2_month || "", a.q1_2_year_be].join("|") : "");
   function ensureCentral(rec) {
     const k = houseKey(rec.answers);
     if (!k || PREVIEW || !settings.api || !settings.team) return;
-    const c = central[k];
-    if (c && (c.busy || Date.now() - c.at < CENTRAL_TTL)) return;
+    const c = central[k], pk = pkOf(rec.answers);
+    if (c && (c.busy || (Date.now() - c.at < CENTRAL_TTL && c.pk === pk))) return;
     clearTimeout(centralTimer);
     centralTimer = setTimeout(async () => {
       const a = rec.answers;
       if (houseKey(a) !== k) return;   // house number changed again: a later call will ask
       if (central[k]) central[k].busy = true; else central[k] = { at: Date.now(), state: "loading", busy: true };
+      const pkNow = pkOf(a);
       try {
-        const d = await centralPost({ action: "house", moo: String(a.h_moo), no: M69.normHouseNo(a.h_house_no), uuid: rec.uuid });
-        central[k] = { at: Date.now(), state: "ok", sets: d.sets, total: d.total };
-      } catch (e) { central[k] = { at: Date.now(), state: "err", msg: e.message }; }
+        const d = await centralPost({ action: "house", moo: String(a.h_moo), no: M69.normHouseNo(a.h_house_no), uuid: rec.uuid, fam: true,
+          ...(pkNow ? { sex: a.q1_1, d: a.q1_2_day, m: a.q1_2_month, y: a.q1_2_year_be } : {}) });
+        central[k] = { at: Date.now(), state: "ok", sets: d.sets, same: d.same || [], sameYear: d.sameYear || [], pk: pkNow, total: d.total };
+      } catch (e) { central[k] = { at: Date.now(), state: "err", msg: e.message, pk: pkNow }; }
       if (currentRec && houseKey(currentRec.answers) === k) refreshChecks(currentRec);
     }, 600);
   }
   const shortDate = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || "")); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("th-TH", { day: "numeric", month: "short" }) : String(s || ""); };
   const sexLabel = (v) => ({ 1: "ชาย", 2: "หญิง" })[Number(v)] || "?";
   const facLabel = (v) => { const o = (qById.get("iv_faculty") || {}).o; const x = o && o.find((y) => String(y.v) === String(v)); return x ? x.label : ""; };
-  // sets already in the shared Sheet for this house with the same sex and age as the person being interviewed
+  // sets already in the shared Sheet for the SAME HOUSE, in two levels (the server compares; no birth date comes back):
+  //   strong = same sex + full birth date · medium = same sex + birth year (day/month differ or are not filled in; elderly people often
+  //   do not know them), or, while no birth year is entered, same sex + same age
   function centralSamePerson(rec) {
-    const c = central[houseKey(rec.answers)], a = rec.answers, age = computeAge(a);
-    if (!c || c.state !== "ok" || !filled(a.q1_1) || age == null) return [];
-    return c.sets.filter((s) => String(s.sex) === String(a.q1_1) && Number(s.age) === Number(age));
+    const c = central[houseKey(rec.answers)], a = rec.answers, none = { strong: [], medium: [] };
+    const age = filled(a.q1_2_age) ? Number(a.q1_2_age) : computeAge(a);   // age typed in directly when the birth date is not known
+    if (!c || c.state !== "ok") return none;
+    const fresh = c.pk === pkOf(a);
+    const ids = fresh ? new Set(c.same || []) : new Set(), yr = fresh ? new Set(c.sameYear || []) : new Set();
+    const strong = c.sets.filter((s) => ids.has(s.uuid));
+    let medium = c.sets.filter((s) => yr.has(s.uuid));
+    if (!filled(a.q1_2_year_be) && filled(a.q1_1) && age != null) medium = c.sets.filter((s) => String(s.sex) === String(a.q1_1) && Number(s.age) === Number(age));
+    return { strong, medium };
   }
   function centralLines(rec) {
     const c = central[houseKey(rec.answers)];
@@ -291,6 +306,149 @@
       lines.push(h("div", null, `ระบบกลาง (ส่งแล้ว): บ้านนี้มีข้อมูลแล้ว ${c.sets.length} ชุด — ${c.sets.map(one).join(" ; ")}${tot}`));
     }
     return lines;
+  }
+  // ------------------------------------------------------------ family-level answers
+  // When another member of the same house already answered a question about the household (income, debt, pets, waste, farm
+  // chemicals), offer that answer. Never opinions or health data. It is only a suggestion: the interviewer taps to use it,
+  // and the Sheet records where it came from (fam_from, fam_q).
+  const FAMILY_Q = ["q1_8", "q1_9", "q1_9_amount", "q11_1", "q11_2", "q11_3", "q11_4", "q12_1_1", "q12_1_2", "q12_3_1", "q12_3_1_1"];
+  // keys of the answers object (and of the Sheet row) that belong to a question: its own, its "other" text, and for pets the per-animal fields
+  const ownsKey = (q, key) => key === q.id || key.startsWith(q.id + "__") || (q.type === "animals" && key.startsWith(q.id + "_") && !key.startsWith(q.id + "__"));
+  const famQs = () => FAMILY_Q.map((id) => qById.get(id)).filter(Boolean);
+  const hasVal = (v) => v != null && v !== "" && !(Array.isArray(v) && !v.length);
+  const ownedKeys = (q, d) => Object.keys(d).filter((k) => ownsKey(q, k) && hasVal(d[k]));
+  const famSig = (q, d) => JSON.stringify(ownedKeys(q, d).sort().map((k) => [k, Array.isArray(d[k]) ? [...d[k]].sort() : d[k]]));
+  function ownedAnswers(q, a) {   // answers of an earlier record on this device for one question (nothing if the form hid that question)
+    const out = {};
+    if (visible(q, a)) ownedKeys(q, a).forEach((k) => (out[k] = a[k]));
+    return out;
+  }
+  // the reverse of flatten() for the family questions: Sheet columns (all text) -> the answers object the form uses
+  function famFromRow(q, f) {
+    const out = {}, num = (v) => (v === "" || v == null ? null : Number(v));
+    switch (q.type) {
+      case "single": {
+        const v = num(f[q.id]);
+        if (v == null) break;
+        out[q.id] = v;
+        const o = q.o.find((x) => x.v === v);
+        if (o && o.other) out[`${q.id}__${v}`] = f[`${q.id}_o${v}_text`] || "";
+        break;
+      }
+      case "number": { const v = num(f[q.id]); if (v != null) out[q.id] = v; break; }
+      case "multi": {
+        const picked = q.o.filter((x) => String(f[`${q.id}_o${x.v}`]) === "1");
+        if (!picked.length) break;
+        out[q.id] = picked.map((x) => x.v);
+        picked.filter((x) => x.other).forEach((x) => (out[`${q.id}__${x.v}`] = f[`${q.id}_o${x.v}_text`] || ""));
+        break;
+      }
+      case "animals":
+        q.animals.forEach((x) => {
+          const k = `${q.id}_${x.key}`, has = num(f[`${k}_has`]);
+          if (has == null) return;
+          out[`${k}_has`] = has;
+          if (has !== 2) return;
+          ["n", "vacc", "deworm"].forEach((s) => {
+            const v = num(f[`${k}_${s}`]);
+            if (v != null) out[`${k}_${s}`] = v;
+            if (String(f[`${k}_${s}_unk`]) === "1") out[`${k}_${s}_unk`] = 1;
+          });
+          if (x.other && f[`${k}_name`]) out[`${k}_name`] = f[`${k}_name`];
+        });
+        break;
+      default: if (hasVal(f[q.id])) out[q.id] = f[q.id];
+    }
+    return out;
+  }
+  function famSummary(q, v) {
+    const lab = (o) => (o ? o.label + (o.other && v[`${q.id}__${o.v}`] ? ` (${v[`${q.id}__${o.v}`]})` : "") : "?");
+    switch (q.type) {
+      case "single": return lab(q.o.find((x) => x.v === v[q.id]));
+      case "multi": return (v[q.id] || []).map((c) => lab(q.o.find((x) => x.v === c))).join(", ");
+      case "number": return `${Number(v[q.id]).toLocaleString("th-TH")}${q.unit ? " " + q.unit : ""}`;
+      case "animals": {
+        const list = q.animals.filter((x) => v[`${q.id}_${x.key}_has`] === 2).map((x) => {
+          const k = `${q.id}_${x.key}`, nm = x.other && v[`${k}_name`] ? `${x.t} (${v[`${k}_name`]})` : x.t;
+          const n = v[`${k}_n_unk`] === 1 ? "ไม่ทราบจำนวน" : v[`${k}_n`] != null ? `${v[`${k}_n`]} ตัว` : "";
+          return `${nm} ${n}`.trim();
+        });
+        return list.join(" · ") || "ไม่มีสัตว์ในรายการ";
+      }
+      default: return String(v[q.id] == null ? "" : v[q.id]);
+    }
+  }
+  // earlier records of this house, newest first: on this device (works offline) and in the shared Sheet (when it was reachable)
+  function famSources(rec) {
+    const k = houseKey(rec.answers);
+    if (!k) return [];
+    const src = [];
+    housematesOf(rec).forEach((r) => {
+      const a = r.answers, age = computeAge(a);
+      src.push({ uuid: r.uuid, t: r.updated_at || r.created_at || "", get: (q) => ownedAnswers(q, a), who: [sexLabel(a.q1_1), age != null ? `${age} ปี` : "", "เครื่องนี้"].filter(Boolean).join(" ") });
+    });
+    const c = central[k];
+    if (c && c.state === "ok") c.sets.forEach((s) => {
+      if (src.some((x) => x.uuid === s.uuid)) return;
+      src.push({ uuid: s.uuid, t: s.t || "", get: (q) => famFromRow(q, s.fam || {}), who: `${sexLabel(s.sex)} ${s.age || "?"} ปี · ${[shortDate(s.date), s.by, facLabel(s.fac)].filter(Boolean).join(" · ")}` });
+    });
+    return src.sort((p, q) => String(q.t).localeCompare(String(p.t)));
+  }
+  function famSuggestion(rec, q) {
+    for (const s of famSources(rec)) { const v = s.get(q); if (ownedKeys(q, v).length) return { src: s, v }; }
+    return null;
+  }
+  function applyAnswers(rec, q, sug) {
+    const a = rec.answers;
+    Object.keys(a).filter((k) => ownsKey(q, k)).forEach((k) => delete a[k]);
+    Object.assign(a, sug.v);
+    rec.fam = rec.fam || { src: {}, applied: {} };
+    rec.fam.src[q.id] = sug.src.uuid;
+    rec.fam.applied[q.id] = famSig(q, sug.v);
+  }
+  function applyFamily(rec, q, sug) { applyAnswers(rec, q, sug); touch(rec); renderSection(rec, { keepScroll: true }); }
+  function pendingFamily(rec) {   // questions on this screen that are visible, still empty, and have an earlier answer from the house
+    const s = S.sections[secIndex];
+    if (!s) return [];
+    return famQs().filter((q) => s.q.some((x) => x.id === q.id) && visible(q, rec.answers) && !ownedKeys(q, rec.answers).length && famSuggestion(rec, q));
+  }
+  function applyFamilyAll(rec) {
+    let n = 0;
+    // in form order, re-checking visibility each time (answering "has debt" reveals the amount question)
+    for (const q of famQs()) {
+      if (!S.sections[secIndex].q.some((x) => x.id === q.id) || !visible(q, rec.answers) || ownedKeys(q, rec.answers).length) continue;
+      const sug = famSuggestion(rec, q);
+      if (sug) { applyAnswers(rec, q, sug); n++; }
+    }
+    if (n) { touch(rec); renderSection(rec, { keepScroll: true }); toast(`ใช้คำตอบของครอบครัว ${n} ข้อ`); }
+  }
+  function famProvenance(rec) {   // which answers still equal what was taken from another record of the house
+    const f = rec.fam, a = rec.answers, qs = [], from = new Set();
+    if (f) Object.keys(f.applied).forEach((id) => {
+      const q = qById.get(id);
+      if (q && visible(q, a) && famSig(q, a) === f.applied[id]) { qs.push(id); from.add(f.src[id]); }
+    });
+    return { from: [...from].join(","), q: qs.join(",") };
+  }
+  function paintFamily(rec) {
+    const a = rec.answers;
+    document.querySelectorAll(".qsuggest").forEach((el) => {
+      const q = qById.get(el.dataset.q), sug = q && famSuggestion(rec, q);
+      if (!sug) { el.hidden = true; mount(el, []); return; }
+      el.hidden = false;
+      if (famSig(q, a) === famSig(q, sug.v)) { mount(el, [h("span", { class: "fsame" }, `✓ ตรงกับที่ครอบครัวนี้เคยตอบ (${sug.src.who})`)]); return; }
+      mount(el, [
+        h("span", null, ownedKeys(q, a).length ? "ที่ครอบครัวนี้เคยตอบไว้: " : "ครอบครัวนี้เคยตอบไว้: ", h("b", null, famSummary(q, sug.v)), ` (${sug.src.who})`),
+        h("button", { class: "btn tiny", type: "button", onclick: () => applyFamily(rec, q, sug) }, "ใช้ค่านี้"),
+      ]);
+    });
+    const all = document.querySelector(".famall");
+    if (all) {
+      const pend = pendingFamily(rec);
+      all.hidden = pend.length < 2;
+      mount(all, pend.length < 2 ? [] : [h("span", null, `บ้านนี้มีคำตอบระดับครอบครัวจากคนก่อนหน้า ${pend.length} ข้อที่ยังไม่ได้ตอบ`),
+        h("button", { class: "btn tiny", type: "button", onclick: () => applyFamilyAll(rec) }, "ใช้ทั้งหมดในส่วนนี้")]);
+    }
   }
   // team total on the home screen: the last known value is shown at once, refreshed when online
   function paintTotals() {
@@ -325,6 +483,7 @@
       el.hidden = !lines.length;
       mount(el, lines);
     });
+    paintFamily(rec);
   }
 
   // ------------------------------------------------------------ sync
@@ -547,6 +706,7 @@
     }
     card.append(body, h("div", { class: "qwarn", "data-q": q.id, hidden: true, role: "status" }));
     if (q.id === "h_house_no") card.append(h("div", { class: "qinfo", "data-q": q.id, hidden: true, role: "status" }));
+    if (FAMILY_Q.includes(q.id)) card.append(h("div", { class: "qsuggest", "data-q": q.id, hidden: true, role: "status" }));
     return card;
   }
 
@@ -786,6 +946,7 @@
     mount(box,
       h("h1", null, s.title),
       s.note ? h("p", { class: "snote" }, s.note) : null,
+      s.q.some((q) => FAMILY_Q.includes(q.id)) ? h("div", { class: "famall", hidden: true, role: "status" }) : null,
       qs.map((q) => question(q, a, rec)),
       hidden ? h("p", { class: "fine" }, `ข้ามให้อัตโนมัติ ${hidden} ข้อ ตามคำตอบก่อนหน้า`) : null,
       h("a", { class: "btn primary big endnext", href: `#/form/${rec.uuid}/${secIndex + 1}` }, secIndex === S.sections.length - 1 ? "ไปหน้าตรวจทาน ›" : `ถัดไป: ${S.sections[secIndex + 1].short || S.sections[secIndex + 1].title} ›`));
