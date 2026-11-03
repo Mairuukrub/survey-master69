@@ -168,6 +168,10 @@ input.warn, .computed.warn { border-color: #d98e00; background: var(--warn-soft)
 .qinfo[hidden] { display: none; }
 .qinfo > div + div { margin-top: 6px; }
 .qinfo .cnote { color: var(--muted); }
+.qsuggest, .famall { margin-top: 10px; padding: 8px 12px; border-radius: 10px; border: 1px dashed var(--accent); color: var(--ink-2); font-size: 14px; line-height: 1.5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.famall { margin: 4px 0 14px; background: var(--accent-soft); }
+.qsuggest[hidden], .famall[hidden] { display: none; }
+.qsuggest .fsame { color: var(--muted); }
 .q.flash { animation: qflash 1.6s ease-out; }
 @keyframes qflash { 0%, 30% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .q.flash { animation: none; outline: 3px solid var(--accent); } }
